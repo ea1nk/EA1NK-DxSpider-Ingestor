@@ -37,6 +37,9 @@ const clients=new Set();
 let flushTimer;
 let dxConnected=false;
 let lastSpotTimestamp=null;
+// Store seen spots: Key is the fingerprint, Value is the timestamp
+const seenSpots = new Map();
+const DUP_WINDOW_MS = 60 * 1000; // 60 seconds window
 
 // --- UTILITIES ---
 const getBand=(f) => {
@@ -129,12 +132,19 @@ function detectAutomatedPatterns(comment, mode) {
     return false;
 }
 
+
 function parseSpot(data) {
-    // 1. Clean network noise and control characters
+    // 1. Pre-processing: Remove control characters (like bell \x07) and trim whitespace
     const cleanData = data.toString().replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
     
-    // 2. Regex: Note that the fourth group (payload) captures EVERYTHING between the callsign and the time
-    const regex = /^DX de\s+([\w\d/-]+(?:-#)?):\s+([\d.]+)\s+([\w\d/]+)\s+(.*?)\s+(\d{4})Z$/i;
+    // 2. Regex Breakdown:
+    // ^DX de\s+           -> Matches the start of the spot
+    // ([\w\d/-]+(?:-#)?)  -> Group 1: Spotter callsign (allows -# suffix)
+    // :\s+([\d.]+)        -> Group 2: Frequency
+    // \s+([\w\d/]+)       -> Group 3: Spotted callsign
+    // \s+(.*?)            -> Group 4: Comment/Payload (lazy match)
+    // (?:\s+(\d{4})Z)?$   -> Group 5: Optional Time (e.g., 1731Z) at the end
+    const regex = /^DX de\s+([\w\d/-]+(?:-#)?):\s+([\d.]+)\s+([\w\d/]+)\s+(.*?)(?:\s+(\d{4})Z)?$/i;
     const match = cleanData.match(regex);
 
     if (!match) return null;
@@ -144,31 +154,35 @@ function parseSpot(data) {
     const spotter = rawSpotter.toUpperCase();
     const spotted = rawSpotted.toUpperCase();
     
-    // KEEP THE FULL COMMENT
-    const comment = payload.trim(); 
-    
+    // Ensure the full comment is preserved
+    const comment = payload ? payload.trim() : ""; 
     const mode = normalizeMode(inferMode(freq, comment));
 
-    // 3. SNR extraction without "deleting" the comment
+    // 3. SNR Extraction: Look for [+-]Number followed by 'dB'
     const snrMatch = comment.match(/([+-]?\d+)\s*dB/i);
     const snr = snrMatch ? parseInt(snrMatch[1], 10) : null;
 
-    // 4. Optimized RBN vs TRAD logic
+    // 4. RBN vs TRAD Differentiation Logic
     const hasRbnSuffix = spotter.endsWith('-#');
     const hasWpm = /\d+\s*WPM/i.test(comment);
     
-    // A spot is RBN if it has the suffix, or if it has SNR+WPM
-    // But if it has a lot of text (like "DAG HOLLAND"), it is likely TRAD even if it includes dB
+    // Heuristic: Identify automated spots even if they lack the -# suffix
+    // Automated spots typically include SNR and WPM or are very short digital reports
     let isRbn = hasRbnSuffix || (snr !== null && hasWpm);
     
-    // Refinement: If it does not have the RBN suffix and the comment is long (> 15 characters),
-    // we treat it as TRAD (human who wrote the report)
-    if (!hasRbnSuffix && comment.length > 15) {
+    // Refinement: If it's a long comment without an RBN suffix, assume it's a manual entry
+    if (!hasRbnSuffix && comment.length > 20) {
         isRbn = false;
     }
 
+    // 5. Timestamp Handling
     const timestamp = new Date();
-    timestamp.setUTCHours(timeZ.substring(0, 2), timeZ.substring(2, 4), 0, 0);
+    if (timeZ) {
+        // Use the time provided by the cluster in UTC
+        timestamp.setUTCHours(timeZ.substring(0, 2), timeZ.substring(2, 4), 0, 0);
+    } else {
+        // Fallback: If no time is present, the current system UTC time is used
+    }
 
     return {
         spotter,
@@ -176,16 +190,48 @@ function parseSpot(data) {
         freq,
         band: getBand(freq),
         mode,
-        comment, // Here you will now have the full "FT8 +26 dB DAG HOLLAND"
-        snr,     // Here you will have 26 (numeric)
+        comment, // Full original comment is stored here
+        snr,
         rbn: isRbn,
-        time_z: timeZ,
+        time_z: timeZ || timestamp.getUTCHours().toString().padStart(2, '0') + timestamp.getUTCMinutes().toString().padStart(2, '0'),
         timestamp,
         cty: { 
             spotter: lookupCallsignInfo(spotter), 
             spotted: lookupCallsignInfo(spotted) 
         }
     };
+}
+
+function isDuplicate(spot) {
+    // We round the frequency to 0.1 kHz to catch spots that are slightly off
+    const roundedFreq = Math.round(spot.freq * 10) / 10;
+    const fingerprint = `${spot.spotted}|${roundedFreq}|${spot.mode}`;
+    
+    const now = Date.now();
+    const lastSeen = seenSpots.get(fingerprint);
+
+    if (lastSeen && (now - lastSeen) < DUP_WINDOW_MS) {
+        return true; // It's a duplicate
+    }
+
+    // Update the cache with the current time
+    seenSpots.set(fingerprint, now);
+
+    // Optional: Cleanup old entries to prevent memory leaks every 100 spots
+    if (seenSpots.size > 1000) {
+        cleanupCache(now);
+    }
+
+    return false;
+}
+
+
+function cleanupCache(now) {
+    for (const [key, timestamp] of seenSpots.entries()) {
+        if (now - timestamp > DUP_WINDOW_MS) {
+            seenSpots.delete(key);
+        }
+    }
 }
 
 async function flushBuffer() {
@@ -212,35 +258,32 @@ function connectToDxCluster() {
     });
 
     telnet.on('data', async (data) => {
-    // 1. Clean control characters (such as bell/beeps \x07)
-    const cleanData = data.toString().replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
-    const lines = cleanData.split(/\r?\n/);
-
+    const lines = data.toString().split(/\r?\n/);
+    
     for (let line of lines) {
-        // Only process lines that have the standard spot format
-        if (line.startsWith('DX de')) {
+        if (line.includes('DX de')) {
             const spot = parseSpot(line);
             
             if (spot) {
-                // Refine the RBN mark before sending
-                // A TRAD spot can become RBN if we detect automated patterns
-                const isAutomated = spot.rbn || detectAutomatedPatterns(spot.comment, spot.mode);
-                spot.rbn = isAutomated;
+                // --- DEDUPLICATION LOGIC ---
+                if (isDuplicate(spot)) {
+                    // Skip this spot as it was recently processed
+                    continue; 
+                }
+                // ---------------------------
 
-                const label = isAutomated ? 'RBN' : 'TRAD';
-                console.log(`[${label}]: ${spot.freq.toFixed(1)} ${spot.spotted} by ${spot.spotter}`);
+                //console.log(`[${spot.rbn ? 'RBN' : 'TRAD'}]: ${spot.spotted} on ${spot.freq}`);
 
                 lastSpotTimestamp = spot.timestamp;
                 const msg = JSON.stringify(spot);
                 
+                // Broadcast to websocket clients
                 for (const c of clients) {
                     if (c.readyState === 1) c.send(msg);
                 }
 
                 buffer.push(spot);
                 if (buffer.length >= BUFFER_LIMIT) await flushBuffer();
-            } else {
-                console.warn('[NOT PARSED]:', line);
             }
         }
     }
