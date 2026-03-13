@@ -1,7 +1,6 @@
 /**
  * RBN & TRADITIONAL INGESTOR + API + WEBSOCKETS
- * Optimized for Raspberry Pi 4 (2GB RAM) and WD Red HDD
- */
+*/
 
 require('dotenv').config();
 
@@ -285,7 +284,7 @@ async function start() {
     await client.connect();
     spotsCollection=client.db(DB_NAME).collection(COLLECTION_NAME);
 
-    // Critical indexes for WD Red
+    // Critical indexes for queries
     await spotsCollection.createIndex({ timestamp: -1 });
     await spotsCollection.createIndex({ rbn: 1, timestamp: -1 });
     await spotsCollection.createIndex({ 'cty.spotter.data.Country': 1, timestamp: -1 });
@@ -317,7 +316,7 @@ async function start() {
                     const msg=JSON.stringify(spot);
                     for (const c of clients) if (c.socket.readyState===1) c.socket.send(msg);
 
-                    // Buffer for WD Red
+                    // Buffer for decrease writings to disk and extend drive lifespan
                     buffer.push(spot);
                     if (buffer.length>=BUFFER_LIMIT) {
                         const batch=[...buffer];
