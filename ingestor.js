@@ -13,7 +13,7 @@ const { lookupCallsignInfo }=require('./callsignLookup');
 
 // --- CONFIGURATION ---
 const MONGO_URL=process.env.MONGO_URL||'mongodb://db:27017';
-const DB_NAME=process.env.DB_NAME||'rbn_radio';
+const DB_NAME=process.env.DB_NAME||'spider_spots';
 const COLLECTION_NAME=process.env.COLLECTION_NAME||'spots';
 const DX_HOST=process.env.DX_HOST||'localhost';
 const DX_PORT=parseInt(process.env.DX_PORT, 10)||7300;
