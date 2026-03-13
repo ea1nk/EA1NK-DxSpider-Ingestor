@@ -64,49 +64,82 @@ const getBand=(f) => {
 const toMHz=(f) => (f>1000? f/1000:f);
 const isNear=(value, target, delta=0.003) => Math.abs(value-target)<=delta;
 
-function inferModeByHFSubband(mhz) {
-    if (mhz>=1.8&&mhz<1.838) return "CW";
-    if (mhz>=1.84&&mhz<=2.0) return "SSB";
-    if (mhz>=3.5&&mhz<3.58) return "CW";
-    if (mhz>=3.6&&mhz<=3.8) return "SSB";
-    if (mhz>=7.0&&mhz<7.04) return "CW";
-    if (mhz>=7.125&&mhz<=7.2) return "SSB";
-    if (mhz>=10.1&&mhz<=10.15) return "CW";
-    if (mhz>=14.0&&mhz<14.07) return "CW";
-    if (mhz>=14.112&&mhz<=14.35) return "SSB";
-    if (mhz>=18.068&&mhz<18.11) return "CW";
-    if (mhz>=18.111&&mhz<=18.168) return "SSB";
-    if (mhz>=21.0&&mhz<21.07) return "CW";
-    if (mhz>=21.151&&mhz<=21.45) return "SSB";
-    if (mhz>=24.89&&mhz<24.93) return "CW";
-    if (mhz>=24.931&&mhz<=24.99) return "SSB";
-    if (mhz>=28.0&&mhz<28.07) return "CW";
-    if (mhz>=28.3&&mhz<=29.7) return "SSB";
-    return null;
+function inferModeByHFSubband(freq) {
+    let mhz = freq > 500 ? freq / 1000 : freq;
+
+    // 160m - 10m
+    if (mhz >= 1.8 && mhz < 1.838) return "CW";
+    if (mhz >= 1.838 && mhz < 1.84) return "DIGI";
+    if (mhz >= 1.84 && mhz <= 2.0) return "SSB";
+    if (mhz >= 3.5 && mhz < 3.57) return "CW";
+    if (mhz >= 3.57 && mhz < 3.6) return "DIGI";
+    if (mhz >= 3.6 && mhz <= 3.8) return "SSB";
+    if (mhz >= 7.0 && mhz < 7.04) return "CW";
+    if (mhz >= 7.04 && mhz < 7.05) return "DIGI";
+    if (mhz >= 7.05 && mhz <= 7.3) return "SSB"; // Extended for 7217, 7240
+    if (mhz >= 10.1 && mhz < 10.13) return "CW";
+    if (mhz >= 10.13 && mhz <= 10.15) return "DIGI";
+    if (mhz >= 14.0 && mhz < 14.07) return "CW";
+    if (mhz >= 14.07 && mhz < 14.1) return "DIGI";
+    if (mhz >= 14.1 && mhz <= 14.35) return "SSB";
+    if (mhz >= 18.068 && mhz < 18.095) return "CW";
+    if (mhz >= 18.095 && mhz < 18.11) return "DIGI";
+    if (mhz >= 18.11 && mhz <= 18.168) return "SSB";
+    if (mhz >= 21.0 && mhz < 21.07) return "CW";
+    if (mhz >= 21.07 && mhz < 21.12) return "DIGI";
+    if (mhz >= 21.12 && mhz <= 21.45) return "SSB";
+    if (mhz >= 24.89 && mhz < 24.915) return "CW";
+    if (mhz >= 24.915 && mhz < 24.94) return "DIGI";
+    if (mhz >= 24.94 && mhz <= 24.99) return "SSB";
+    if (mhz >= 28.0 && mhz < 28.07) return "CW";
+    if (mhz >= 28.07 && mhz < 28.2) return "DIGI";
+    if (mhz >= 28.2 && mhz <= 29.7) return "SSB"; // Extended for 28285
+
+    // 6m (VHF)
+    if (mhz >= 50.0 && mhz < 50.1) return "CW";
+    if (mhz >= 50.1 && mhz < 50.3) return "SSB";
+    if (mhz >= 50.3 && mhz <= 52.0) return "DIGI";
+
+    // 2m (VHF)
+    if (mhz >= 144.0 && mhz < 144.1) return "CW";
+    if (mhz >= 144.1 && mhz < 144.15) return "SSB";
+    if (mhz >= 144.15 && mhz <= 144.4) return "DIGI"; // For 144174
+    if (mhz >= 144.5 && mhz <= 148.0) return "FM"; 
+
+    return "UNK";
 }
 
-function inferMode(freq, comment) {
-    const mhz=toMHz(freq);
-    const text=(comment||"").toUpperCase();
+/**
+ * Main inference engine.
+ * Added logic for Beacons (/B) and refined band ranges.
+ */
+function inferMode(freq, comment, callsign) {
+    const mhz = freq > 500 ? freq / 1000 : freq;
+    const text = (comment || "").toUpperCase();
+    const call = (callsign || "").toUpperCase();
+
+    // 1. Check if it is a Beacon (/B)
+    if (call.endsWith("/B")) return "CW";
+
+    // 2. Check for specific Digital Modes in comment
     if (/\bFT8\b/.test(text)) return "FT8";
     if (/\bFT4\b/.test(text)) return "FT4";
-    if (/\bJT65\b/.test(text)) return "JT65";
-    if (/\bJT9\b/.test(text)) return "JT9";
-    if (/\bWSPR\b/.test(text)) return "WSPR";
-    if (/\bRTTY\b|\bFSK\b/.test(text)) return "RTTY";
-    if (/\bPSK31\b/.test(text)) return "PSK31";
-    if (/\bPSK63\b/.test(text)) return "PSK63";
-    if (/\bPSK\b/.test(text)) return "PSK";
-    if (/\bCW\b|\bWPM\b/.test(text)) return "CW";
-    if (/\bSSB\b|\bUSB\b|\bLSB\b|\bPHONE\b/.test(text)) return "SSB";
+    if (/\b(RTTY|FSK)\b/.test(text)) return "RTTY";
+    
+    // 3. Magic Frequencies (Standard and DXpedition)
+    const isNear = (f1, f2) => Math.abs(f1 - f2) <= 0.003;
+    const ft8Freqs = [1.84, 3.573, 7.074, 10.136, 14.074, 18.1, 21.074, 24.915, 28.074, 50.313, 144.174];
+    const dxFreqs = [1.844, 3.567, 7.056, 10.131, 14.090, 18.095, 21.091, 24.911, 28.091];
+    if (ft8Freqs.some(f => isNear(mhz, f)) || dxFreqs.some(f => isNear(mhz, f))) return "FT8";
+
+    // 4. Analog Modes in comment
+    if (/\b(CW|WPM)\b/.test(text) || /\b\d+\s?DB\b/.test(text)) return "CW";
+    if (/\b(SSB|USB|LSB|PHONE|PH)\b/.test(text)) return "SSB";
     if (/\bAM\b/.test(text)) return "AM";
     if (/\bFM\b/.test(text)) return "FM";
 
-    const ft8Freqs=[1.84, 3.573, 7.074, 10.136, 14.074, 18.1, 21.074, 24.915, 28.074, 50.313];
-    if (ft8Freqs.some((f) => isNear(mhz, f))) return "FT8";
-
-    if (/\bDB\b/.test(text)) return "CW";
-    return inferModeByHFSubband(mhz) || "UNK";
+    // 5. Fallback to band plan
+    return inferModeByHFSubband(mhz);
 }
 
 function normalizeMode(mode) {
