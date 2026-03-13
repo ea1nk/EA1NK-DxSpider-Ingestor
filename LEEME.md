@@ -117,7 +117,7 @@ Ejemplo de spot guardado:
   "spotted": "EA1XYZ",
   "freq": 14074.0,
   "band": "20m",
-  "mode": "EA1XYZ",
+  "mode": "FT8",
   "snr": 18,
   "rbn": true,
   "time_z": "1205",
@@ -154,4 +154,3 @@ Ejemplo de spot guardado:
 
 - Los spots caducan automaticamente a los 7 dias (indice TTL en `timestamp`).
 - Hay indices para `timestamp`, `rbn`, pais CTY, prefijo CTY y continente CTY.
-- Nota de compatibilidad: el campo `mode` actualmente guarda el indicativo parseado como `spotted`.

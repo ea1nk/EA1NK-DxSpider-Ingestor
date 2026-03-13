@@ -117,7 +117,7 @@ Example structure inserted into MongoDB:
   "spotted": "EA1XYZ",
   "freq": 14074.0,
   "band": "20m",
-  "mode": "EA1XYZ",
+  "mode": "FT8",
   "snr": 18,
   "rbn": true,
   "time_z": "1205",
@@ -154,4 +154,3 @@ Example structure inserted into MongoDB:
 
 - Spots expire automatically after 7 days (TTL index on `timestamp`).
 - There are dedicated indexes for timestamp, RBN, CTY country, CTY prefix, and CTY continent fields.
-- Legacy note: `mode` currently stores the parsed spotted callsign value.

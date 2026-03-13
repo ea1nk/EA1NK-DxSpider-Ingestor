@@ -131,6 +131,18 @@ function extractExplicitMode(payload) {
     return match[1];
 }
 
+function normalizeMode(mode) {
+    const text=(mode||"").toString().toUpperCase().trim();
+    if (!text) return "UNK";
+    if (text==="PHONE"||text==="USB"||text==="LSB") return "SSB";
+
+    const validModes=new Set([
+        "CW", "SSB", "AM", "FM", "FT8", "FT4", "JT65", "JT9", "WSPR", "RTTY", "PSK31", "PSK63", "PSK", "UNK",
+    ]);
+    if (validModes.has(text)) return text;
+    return "UNK";
+}
+
 function parseSpot(data) {
     const cleanLine=data.replace(/[\x00-\x1F\x7F-\x9F]/g, "").trim();
     const regex=/^DX de\s+([^:]+):\s+([\d.]+)\s+(\S+)\s+(.+?)\s+(\d{4})Z$/i;
@@ -142,7 +154,10 @@ function parseSpot(data) {
         const spottedCallsign=match[3].toUpperCase();
         const payload=(match[4]||"").trim();
         const explicitMode=extractExplicitMode(payload);
-        const mode=explicitMode||inferMode(freq, payload);
+        const inferredMode=explicitMode||inferMode(freq, payload);
+        let mode=normalizeMode(inferredMode);
+        // Never store callsigns in mode, even if malformed upstream data appears.
+        if (mode===spotterCallsign||mode===spottedCallsign) mode="UNK";
         const snrMatch=payload.match(/([+-]?\d+)\s*dB\b/i);
         const snr=snrMatch? parseInt(snrMatch[1], 10):null;
         const isRbn=/\bdB\b|\bWPM\b|\bBPS\b/i.test(payload);
