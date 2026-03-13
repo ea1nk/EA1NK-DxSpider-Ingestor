@@ -12,7 +12,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: rbn-ingestor
+    container_name: dxspider-ingestor
     restart: unless-stopped
     depends_on:
       - db
