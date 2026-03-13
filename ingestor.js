@@ -20,6 +20,7 @@ const DX_PORT=parseInt(process.env.DX_PORT, 10)||7300;
 const CALLSIGN=process.env.CALLSIGN||'YOUR_CALLSIGN';
 const SECRET_KEY=process.env.SECRET_KEY||'YOUR_SUPERSECRET_KEY';
 const API_PASSWORD=process.env.API_PASSWORD||'radio_password';
+const DISABLE_TOKEN_AUTH=(process.env.DISABLE_TOKEN_AUTH||'false').toLowerCase()==='true';
 const SERVER_HOST=process.env.SERVER_HOST||'0.0.0.0';
 const SERVER_PORT=parseInt(process.env.SERVER_PORT, 10)||3000;
 const BUFFER_LIMIT=parseInt(process.env.BUFFER_LIMIT, 10)||15;
@@ -258,6 +259,7 @@ fastify.register(jwt, { secret: SECRET_KEY });
 fastify.register(websocket);
 
 fastify.decorate("authenticate", async (request, reply) => {
+    if (DISABLE_TOKEN_AUTH) return;
     try { await request.jwtVerify(); }
     catch (err) { reply.code(401).send({ error: 'Unauthorized' }); }
 });
