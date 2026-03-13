@@ -9,6 +9,7 @@ const { MongoClient }=require('mongodb');
 const fastify=require('fastify')({ logger: false });
 const websocket=require('@fastify/websocket');
 const jwt=require('@fastify/jwt');
+const fp = require('fastify-plugin');
 const { lookupCallsignInfo }=require('./callsignLookup');
 
 // --- CONFIGURATION ---
@@ -240,7 +241,7 @@ function connectToDxCluster() {
                 if (spot) {
                     lastSpotTimestamp=spot.timestamp;
                     const msg=JSON.stringify(spot);
-                    for (const c of clients) if (c.socket.readyState===1) c.socket.send(msg);
+                        for (const c of clients) if (c.readyState===1) c.send(msg);
 
                     buffer.push(spot);
                     if (buffer.length>=BUFFER_LIMIT) {
@@ -260,7 +261,9 @@ function connectToDxCluster() {
 
 // --- PLUGIN REGISTRATION ---
 fastify.register(jwt, { secret: SECRET_KEY });
-fastify.register(websocket);
+fastify.register(fp(async (instance) => {
+    instance.register(websocket);
+}));
 
 fastify.decorate("authenticate", async (request, reply) => {
     if (DISABLE_TOKEN_AUTH) return;
@@ -271,10 +274,44 @@ fastify.decorate("authenticate", async (request, reply) => {
 // --- ROUTES AND WEBSOCKET ---
 fastify.register(async (instance) => {
     // Real-time WebSocket channel
-    instance.get('/ws', { websocket: true }, (connection) => {
-        clients.add(connection);
-        connection.socket.on('close', () => clients.delete(connection));
+    // Asegúrate de usar (connection, req) y que sea async
+    instance.get('/ws', { websocket: true }, async (connection, req) => {
+    console.log(`[WS] Intento de conexión desde: ${req.ip}`);
+
+    // Según tu log, 'connection' ya es el objeto WebSocket
+    const socket = connection; 
+
+    if (typeof socket.on !== 'function') {
+        console.error('[WS] Error: El objeto no tiene el método .on', socket);
+        return;
+    }
+
+    console.log(`[WS] Conexión establecida con éxito`);
+
+    clients.add(connection);
+
+    socket.on('message', (message) => {
+        console.log(`Mensaje de ${req.ip}: ${message.toString()}`);
     });
+
+    socket.on('close', () => {
+        console.log(`[WS] Conexión cerrada`);
+        clients.delete(connection);
+    });
+
+    socket.on('error', (err) => {
+        console.error(`[WS Error]:`, err.message);
+    });
+
+    // Enviar bienvenida
+    socket.send(JSON.stringify({ status: "ok", message: "Connected" }));
+
+    // Mantener vivo el handler
+    await new Promise((resolve) => {
+        socket.on('close', resolve);
+        socket.on('error', resolve);
+    });
+});
 
     // API Login
     instance.post('/login', async (req) => {
@@ -312,6 +349,14 @@ fastify.register(async (instance) => {
             },
             uptimeSeconds: Math.round(process.uptime()),
         };
+    });
+
+    instance.get('/test-ws', async () => {
+    const testMsg = JSON.stringify({ test: "Probando WebSocket", timestamp: new Date() });
+    for (const c of clients) {
+        if (c.readyState === 1) c.send(testMsg);
+    }
+    return { status: "Mensaje de prueba enviado a " + clients.size + " clientes" };
     });
 
     // Historical query API (with filters)
