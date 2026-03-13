@@ -114,28 +114,70 @@ function normalizeMode(mode) {
     return validModes.has(text) ? text : "UNK";
 }
 
-function parseSpot(data) {
-    const regex=/^DX de\s+([^:]+):\s+([\d.]+)\s+(\S+)\s+(.+?)\s+(\d{4})Z$/i;
-    const match=data.trim().match(regex);
 
-    if (match) {
-        const freq=parseFloat(match[2]);
-        const spotter=match[1].toUpperCase();
-        const spotted=match[3].toUpperCase();
-        const payload=(match[4]||"").trim();
-        const mode=normalizeMode(inferMode(freq, payload));
-        const snrMatch=payload.match(/([+-]?\d+)\s*dB\b/i);
-        const isRbn=/([+-]?\d+)\s*dB\b|\bWPM\b|\bBPS\b/i.test(payload);
-
-        return {
-            spotter, spotted, freq, band: getBand(freq),
-            mode, comment: payload,
-            snr: snrMatch? parseInt(snrMatch[1], 10):null,
-            rbn: isRbn, time_z: match[5], timestamp: new Date(),
-            cty: { spotter: lookupCallsignInfo(spotter), spotted: lookupCallsignInfo(spotted) },
-        };
+function detectAutomatedPatterns(comment, mode) {
+    const c = comment.toUpperCase();
+    const hasSNR = /\d+\s*DB/.test(c);
+    const hasWPM = /\d+\s*WPM/.test(c);
+    
+    if ((mode === 'FT8' || mode === 'FT4') && hasSNR && comment.length < 12) {
+        return true;
     }
-    return null;
+    
+    if (hasSNR && hasWPM) return true;
+
+    return false;
+}
+
+function parseSpot(data) {
+    // 1. Pre-cleaning: remove control characters (beeps, etc.)
+    const cleanData = data.toString().replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
+    
+    // 2. Robust regex: captures spotter, frequency, spotted, comment and time
+    const regex = /^DX de\s+([\w\d/-]+(?:-#)?):\s+([\d.]+)\s+([\w\d/]+)\s+(.*?)\s+(\d{4})Z$/i;
+    const match = cleanData.match(regex);
+
+    if (!match) return null;
+
+    const [, rawSpotter, rawFreq, rawSpotted, payload, timeZ] = match;
+    const freq = parseFloat(rawFreq);
+    const spotter = rawSpotter.toUpperCase();
+    const spotted = rawSpotted.toUpperCase();
+    const comment = payload.trim();
+    const mode = normalizeMode(inferMode(freq, comment));
+
+    // 3. SNR extraction (only if it appears as a numeric value + dB)
+    const snrMatch = comment.match(/(?:^|\s)([+-]?\d+)\s*dB/i);
+    const snr = snrMatch ? parseInt(snrMatch[1], 10) : null;
+
+    // 4. RBN vs TRAD logic
+    // It's RBN if: has the -# suffix OR has SNR+WPM OR is digital with minimal SNR comment
+    const hasRbnSuffix = spotter.endsWith('-#');
+    const hasWpm = /\d+\s*WPM/i.test(comment);
+    const isAutomatedDigital = (mode === 'FT8' || mode === 'FT4') && snr !== null && comment.length < 12;
+    
+    const isRbn = hasRbnSuffix || (snr !== null && hasWpm) || isAutomatedDigital;
+
+    // 5. UTC time management (to avoid local time shifts)
+    const timestamp = new Date();
+    timestamp.setUTCHours(timeZ.substring(0, 2), timeZ.substring(2, 4), 0, 0);
+
+    return {
+        spotter,
+        spotted,
+        freq,
+        band: getBand(freq),
+        mode,
+        comment,
+        snr,
+        rbn: isRbn,
+        time_z: timeZ,
+        timestamp,
+        cty: { 
+            spotter: lookupCallsignInfo(spotter), 
+            spotted: lookupCallsignInfo(spotted) 
+        }
+    };
 }
 
 async function flushBuffer() {
@@ -162,20 +204,40 @@ function connectToDxCluster() {
     });
 
     telnet.on('data', async (data) => {
-        const lines=data.toString().split(/\r?\n/);
-        for (let line of lines) {
-            if (line.includes('DX de')) {
-                const spot=parseSpot(line);
-                if (spot) {
-                    lastSpotTimestamp=spot.timestamp;
-                    const msg=JSON.stringify(spot);
-                    for (const c of clients) if (c.readyState===1) c.send(msg);
-                    buffer.push(spot);
-                    if (buffer.length>=BUFFER_LIMIT) await flushBuffer();
+    // 1. Clean control characters (such as bell/beeps \x07)
+    const cleanData = data.toString().replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+    const lines = cleanData.split(/\r?\n/);
+
+    for (let line of lines) {
+        // Only process lines that have the standard spot format
+        if (line.startsWith('DX de')) {
+            const spot = parseSpot(line);
+            
+            if (spot) {
+                // Refine the RBN mark before sending
+                // A TRAD spot can become RBN if we detect automated patterns
+                const isAutomated = spot.rbn || detectAutomatedPatterns(spot.comment, spot.mode);
+                spot.rbn = isAutomated;
+
+                const label = isAutomated ? 'RBN' : 'TRAD';
+                console.log(`[${label}]: ${spot.freq.toFixed(1)} ${spot.spotted} by ${spot.spotter}`);
+
+                lastSpotTimestamp = spot.timestamp;
+                const msg = JSON.stringify(spot);
+                
+                for (const c of clients) {
+                    if (c.readyState === 1) c.send(msg);
                 }
+
+                buffer.push(spot);
+                if (buffer.length >= BUFFER_LIMIT) await flushBuffer();
+            } else {
+                console.warn('[NOT PARSED]:', line);
             }
         }
-    });
+    }
+});
+
     telnet.on('close', () => { dxConnected=false; setTimeout(connectToDxCluster, RECONNECT_DELAY_MS); });
 }
 
