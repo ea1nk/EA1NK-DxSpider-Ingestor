@@ -130,10 +130,10 @@ function detectAutomatedPatterns(comment, mode) {
 }
 
 function parseSpot(data) {
-    // 1. Pre-cleaning: remove control characters (beeps, etc.)
+    // 1. Clean network noise and control characters
     const cleanData = data.toString().replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
     
-    // 2. Robust regex: captures spotter, frequency, spotted, comment and time
+    // 2. Regex: Note that the fourth group (payload) captures EVERYTHING between the callsign and the time
     const regex = /^DX de\s+([\w\d/-]+(?:-#)?):\s+([\d.]+)\s+([\w\d/]+)\s+(.*?)\s+(\d{4})Z$/i;
     const match = cleanData.match(regex);
 
@@ -143,22 +143,30 @@ function parseSpot(data) {
     const freq = parseFloat(rawFreq);
     const spotter = rawSpotter.toUpperCase();
     const spotted = rawSpotted.toUpperCase();
-    const comment = payload.trim();
+    
+    // KEEP THE FULL COMMENT
+    const comment = payload.trim(); 
+    
     const mode = normalizeMode(inferMode(freq, comment));
 
-    // 3. SNR extraction (only if it appears as a numeric value + dB)
-    const snrMatch = comment.match(/(?:^|\s)([+-]?\d+)\s*dB/i);
+    // 3. SNR extraction without "deleting" the comment
+    const snrMatch = comment.match(/([+-]?\d+)\s*dB/i);
     const snr = snrMatch ? parseInt(snrMatch[1], 10) : null;
 
-    // 4. RBN vs TRAD logic
-    // It's RBN if: has the -# suffix OR has SNR+WPM OR is digital with minimal SNR comment
+    // 4. Optimized RBN vs TRAD logic
     const hasRbnSuffix = spotter.endsWith('-#');
     const hasWpm = /\d+\s*WPM/i.test(comment);
-    const isAutomatedDigital = (mode === 'FT8' || mode === 'FT4') && snr !== null && comment.length < 12;
     
-    const isRbn = hasRbnSuffix || (snr !== null && hasWpm) || isAutomatedDigital;
+    // A spot is RBN if it has the suffix, or if it has SNR+WPM
+    // But if it has a lot of text (like "DAG HOLLAND"), it is likely TRAD even if it includes dB
+    let isRbn = hasRbnSuffix || (snr !== null && hasWpm);
+    
+    // Refinement: If it does not have the RBN suffix and the comment is long (> 15 characters),
+    // we treat it as TRAD (human who wrote the report)
+    if (!hasRbnSuffix && comment.length > 15) {
+        isRbn = false;
+    }
 
-    // 5. UTC time management (to avoid local time shifts)
     const timestamp = new Date();
     timestamp.setUTCHours(timeZ.substring(0, 2), timeZ.substring(2, 4), 0, 0);
 
@@ -168,8 +176,8 @@ function parseSpot(data) {
         freq,
         band: getBand(freq),
         mode,
-        comment,
-        snr,
+        comment, // Here you will now have the full "FT8 +26 dB DAG HOLLAND"
+        snr,     // Here you will have 26 (numeric)
         rbn: isRbn,
         time_z: timeZ,
         timestamp,
