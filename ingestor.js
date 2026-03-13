@@ -226,6 +226,10 @@ function connectToDxCluster() {
         dxConnected=true;
         console.log("📡 Connected to DXSpider");
         telnet.write(`${CALLSIGN}\n`);
+        setTimeout(() => {
+            telnet.write('set/skim\n');
+            console.log('Enviado set/skim al DXSpider');
+        }, 1000); // Espera 1s tras login para evitar solapamiento
     });
 
     telnet.on('data', async (data) => {
