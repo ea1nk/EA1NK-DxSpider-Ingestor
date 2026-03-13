@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Build and coverage output
+dist/
+build/
+coverage/
+
+# Runtime/cache artifacts
+.npm/
+.cache/
+*.pid
+*.seed
+
+# OS/editor noise
+.DS_Store
+.vscode/
+.idea/
+
+# Local persistent data
+mongo_data/

@@ -1,0 +1,17 @@
+{
+  "name": "dictionary-search-ingestor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RBN/DX ingestor with Fastify API, WebSocket stream and MongoDB storage",
+  "main": "ingestor.js",
+  "scripts": {
+    "start": "node ingestor.js"
+  },
+  "dependencies": {
+    "@fastify/jwt": "^9.1.0",
+    "@fastify/websocket": "^11.2.0",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.1",
+    "mongodb": "^6.13.0"
+  }
+}
