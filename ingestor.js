@@ -11,6 +11,7 @@ const websocket=require('@fastify/websocket');
 const jwt=require('@fastify/jwt');
 const fp = require('fastify-plugin');
 const { lookupCallsignInfo }=require('./callsignLookup');
+const path = require('path');
 
 // --- CONFIGURATION ---
 const MONGO_URL=process.env.MONGO_URL||'mongodb://db:27017';
@@ -32,16 +33,14 @@ const FLUSH_INTERVAL_MS=parseInt(process.env.FLUSH_INTERVAL_MS, 10)||5000;
 let spotsCollection;
 let mongoClient;
 let buffer=[];
-const clients=new Set(); // For WebSockets
+const clients=new Set(); 
 let flushTimer;
 let dxConnected=false;
 let lastSpotTimestamp=null;
 
 // --- UTILITIES ---
 const getBand=(f) => {
-    // DX clusters may provide frequency in kHz (e.g. 14074) or MHz (e.g. 14.074).
     const mhz=f>1000? f/1000:f;
-
     if (mhz>=1.8&&mhz<=2.0) return "160m";
     if (mhz>=3.5&&mhz<=3.8) return "80m";
     if (mhz>=5.0&&mhz<=5.5) return "60m";
@@ -60,45 +59,32 @@ const getBand=(f) => {
 };
 
 const toMHz=(f) => (f>1000? f/1000:f);
-
 const isNear=(value, target, delta=0.003) => Math.abs(value-target)<=delta;
 
 function inferModeByHFSubband(mhz) {
-    // Conservative HF split: returns only when segment is typically unambiguous.
     if (mhz>=1.8&&mhz<1.838) return "CW";
     if (mhz>=1.84&&mhz<=2.0) return "SSB";
-
     if (mhz>=3.5&&mhz<3.58) return "CW";
     if (mhz>=3.6&&mhz<=3.8) return "SSB";
-
     if (mhz>=7.0&&mhz<7.04) return "CW";
     if (mhz>=7.125&&mhz<=7.2) return "SSB";
-
     if (mhz>=10.1&&mhz<=10.15) return "CW";
-
     if (mhz>=14.0&&mhz<14.07) return "CW";
     if (mhz>=14.112&&mhz<=14.35) return "SSB";
-
     if (mhz>=18.068&&mhz<18.11) return "CW";
     if (mhz>=18.111&&mhz<=18.168) return "SSB";
-
     if (mhz>=21.0&&mhz<21.07) return "CW";
     if (mhz>=21.151&&mhz<=21.45) return "SSB";
-
     if (mhz>=24.89&&mhz<24.93) return "CW";
     if (mhz>=24.931&&mhz<=24.99) return "SSB";
-
     if (mhz>=28.0&&mhz<28.07) return "CW";
     if (mhz>=28.3&&mhz<=29.7) return "SSB";
-
     return null;
 }
 
 function inferMode(freq, comment) {
     const mhz=toMHz(freq);
     const text=(comment||"").toUpperCase();
-
-    // Priority 1: explicit mode hints in comment.
     if (/\bFT8\b/.test(text)) return "FT8";
     if (/\bFT4\b/.test(text)) return "FT4";
     if (/\bJT65\b/.test(text)) return "JT65";
@@ -113,82 +99,40 @@ function inferMode(freq, comment) {
     if (/\bAM\b/.test(text)) return "AM";
     if (/\bFM\b/.test(text)) return "FM";
 
-    // Priority 2: common activity frequencies when comment is ambiguous.
-    const ft8Freqs=[1.84, 3.573, 5.357, 7.074, 10.136, 14.074, 18.1, 21.074, 24.915, 28.074, 50.313, 70.154, 144.174, 432.174];
+    const ft8Freqs=[1.84, 3.573, 7.074, 10.136, 14.074, 18.1, 21.074, 24.915, 28.074, 50.313];
     if (ft8Freqs.some((f) => isNear(mhz, f))) return "FT8";
 
-    const ft4Freqs=[3.575, 7.0475, 10.14, 14.08, 18.104, 21.14, 24.919, 28.18, 50.318, 144.17];
-    if (ft4Freqs.some((f) => isNear(mhz, f))) return "FT4";
-
-    // RBN spots are usually CW when no explicit mode is provided.
     if (/\bDB\b/.test(text)) return "CW";
-
-    const subbandMode=inferModeByHFSubband(mhz);
-    if (subbandMode) return subbandMode;
-
-    return "UNK";
-}
-
-function extractExplicitMode(payload) {
-    const text=(payload||"").toUpperCase().trim();
-    const match=text.match(/^(CW|SSB|USB|LSB|AM|FM|FT8|FT4|JT65|JT9|WSPR|RTTY|PSK31|PSK63|PSK|PHONE)\b/);
-    if (!match) return null;
-    if (match[1]==="PHONE") return "SSB";
-    return match[1];
+    return inferModeByHFSubband(mhz) || "UNK";
 }
 
 function normalizeMode(mode) {
     const text=(mode||"").toString().toUpperCase().trim();
     if (!text) return "UNK";
     if (text==="PHONE"||text==="USB"||text==="LSB") return "SSB";
-
-    const validModes=new Set([
-        "CW", "SSB", "AM", "FM", "FT8", "FT4", "JT65", "JT9", "WSPR", "RTTY", "PSK31", "PSK63", "PSK", "UNK",
-    ]);
-    if (validModes.has(text)) return text;
-    return "UNK";
+    const validModes=new Set(["CW", "SSB", "AM", "FM", "FT8", "FT4", "RTTY", "PSK31", "WSPR", "UNK"]);
+    return validModes.has(text) ? text : "UNK";
 }
 
 function parseSpot(data) {
-    const cleanLine=data
-        .replace(/&nbsp;/gi, ' ')
-        .replace(/&#160;/gi, ' ')
-        .replace(/[\x00-\x1F\x7F-\x9F]/g, "")
-        .replace(/\s+/g, ' ')
-        .trim();
     const regex=/^DX de\s+([^:]+):\s+([\d.]+)\s+(\S+)\s+(.+?)\s+(\d{4})Z$/i;
-    const match=cleanLine.match(regex);
+    const match=data.trim().match(regex);
 
     if (match) {
         const freq=parseFloat(match[2]);
-        const spotterCallsign=match[1].toUpperCase();
-        const spottedCallsign=match[3].toUpperCase();
+        const spotter=match[1].toUpperCase();
+        const spotted=match[3].toUpperCase();
         const payload=(match[4]||"").trim();
-        const explicitMode=extractExplicitMode(payload);
-        const inferredMode=explicitMode||inferMode(freq, payload);
-        let mode=normalizeMode(inferredMode);
-        if (mode===spotterCallsign||mode===spottedCallsign) mode="UNK";
+        const mode=normalizeMode(inferMode(freq, payload));
         const snrMatch=payload.match(/([+-]?\d+)\s*dB\b/i);
-        const snr=snrMatch? parseInt(snrMatch[1], 10):null;
         const isRbn=/([+-]?\d+)\s*dB\b|\bWPM\b|\bBPS\b/i.test(payload);
-        const spotterCty=lookupCallsignInfo(spotterCallsign);
-        const spottedCty=lookupCallsignInfo(spottedCallsign);
 
         return {
-            spotter: spotterCallsign,
-            spotted: spottedCallsign,
-            freq: freq,
-            band: getBand(freq),
-            mode,
-            comment: payload,
-            snr,
-            rbn: isRbn,
-            time_z: match[5],
-            timestamp: new Date(),
-            cty: {
-                spotter: spotterCty,
-                spotted: spottedCty,
-            },
+            spotter, spotted, freq, band: getBand(freq),
+            mode, comment: payload,
+            snr: snrMatch? parseInt(snrMatch[1], 10):null,
+            rbn: isRbn, time_z: match[5], timestamp: new Date(),
+            cty: { spotter: lookupCallsignInfo(spotter), spotted: lookupCallsignInfo(spotted) },
         };
     }
     return null;
@@ -196,41 +140,25 @@ function parseSpot(data) {
 
 async function flushBuffer() {
     if (!spotsCollection||buffer.length===0) return;
-
     const batch=[...buffer];
     buffer=[];
-
-    try {
-        await spotsCollection.insertMany(batch);
-    }
-    catch (error) {
-        buffer=batch.concat(buffer);
-        console.error('Error flushing buffer to MongoDB:', error);
-    }
+    try { await spotsCollection.insertMany(batch); }
+    catch (error) { buffer=batch.concat(buffer); console.error('DB Flush Error:', error); }
 }
 
 function scheduleBufferFlush() {
     if (flushTimer) clearInterval(flushTimer);
-    flushTimer=setInterval(() => {
-        flushBuffer().catch((error) => console.error('Scheduled flush failed:', error));
-    }, FLUSH_INTERVAL_MS);
+    flushTimer=setInterval(() => flushBuffer().catch(console.error), FLUSH_INTERVAL_MS);
 }
 
 function connectToDxCluster() {
     const telnet=new net.Socket();
-    telnet.on('error', (error) => {
-        dxConnected=false;
-        console.error(`DXSpider connection error: ${error.message}`);
-    });
-
+    telnet.on('error', (e) => { dxConnected=false; console.error(`Cluster error: ${e.message}`); });
     telnet.connect(DX_PORT, DX_HOST, () => {
         dxConnected=true;
         console.log("📡 Connected to DXSpider");
         telnet.write(`${CALLSIGN}\n`);
-        setTimeout(() => {
-            telnet.write('set/skim\n');
-            console.log('Enviado set/skim al DXSpider');
-        }, 1000); // Espera 1s tras login para evitar solapamiento
+        setTimeout(() => telnet.write('set/skim\n'), 1000);
     });
 
     telnet.on('data', async (data) => {
@@ -241,29 +169,25 @@ function connectToDxCluster() {
                 if (spot) {
                     lastSpotTimestamp=spot.timestamp;
                     const msg=JSON.stringify(spot);
-                        for (const c of clients) if (c.readyState===1) c.send(msg);
-
+                    for (const c of clients) if (c.readyState===1) c.send(msg);
                     buffer.push(spot);
-                    if (buffer.length>=BUFFER_LIMIT) {
-                        await flushBuffer();
-                    }
+                    if (buffer.length>=BUFFER_LIMIT) await flushBuffer();
                 }
             }
         }
     });
-
-    telnet.on('close', () => {
-        dxConnected=false;
-        flushBuffer().catch(console.error);
-        setTimeout(connectToDxCluster, RECONNECT_DELAY_MS);
-    });
+    telnet.on('close', () => { dxConnected=false; setTimeout(connectToDxCluster, RECONNECT_DELAY_MS); });
 }
 
-// --- PLUGIN REGISTRATION ---
+// --- FASTIFY SETUP ---
 fastify.register(jwt, { secret: SECRET_KEY });
-fastify.register(fp(async (instance) => {
-    instance.register(websocket);
-}));
+fastify.register(fp(async (instance) => { instance.register(websocket); }));
+
+fastify.register(require('@fastify/static'), {
+    root: path.join(__dirname, 'assets/'),
+    prefix: '/',
+    decorateReply: true
+});
 
 fastify.decorate("authenticate", async (request, reply) => {
     if (DISABLE_TOKEN_AUTH) return;
@@ -271,187 +195,62 @@ fastify.decorate("authenticate", async (request, reply) => {
     catch (err) { reply.code(401).send({ error: 'Unauthorized' }); }
 });
 
-// --- ROUTES AND WEBSOCKET ---
+// --- API & WS INSTANCE ---
 fastify.register(async (instance) => {
-    // Real-time WebSocket channel
-    // Asegúrate de usar (connection, req) y que sea async
+    
+    instance.get('/monitor', (req, reply) => {
+        return reply.sendFile('spots.html');
+    });
+    
+    // WebSocket Channel
     instance.get('/ws', { websocket: true }, async (connection, req) => {
-    console.log(`[WS] Intento de conexión desde: ${req.ip}`);
-
-    // Según tu log, 'connection' ya es el objeto WebSocket
-    const socket = connection; 
-
-    if (typeof socket.on !== 'function') {
-        console.error('[WS] Error: El objeto no tiene el método .on', socket);
-        return;
-    }
-
-    console.log(`[WS] Conexión establecida con éxito`);
-
-    clients.add(connection);
-
-    socket.on('message', (message) => {
-        console.log(`Mensaje de ${req.ip}: ${message.toString()}`);
+        clients.add(connection);
+        connection.send(JSON.stringify({ status: "ok", message: "Connected" }));
+        
+        connection.on('close', () => clients.delete(connection));
+        connection.on('error', (err) => console.error(`[WS Error]:`, err.message));
+        
+        await new Promise((resolve) => {
+            connection.on('close', resolve);
+            connection.on('error', resolve);
+        });
     });
 
-    socket.on('close', () => {
-        console.log(`[WS] Conexión cerrada`);
-        clients.delete(connection);
-    });
-
-    socket.on('error', (err) => {
-        console.error(`[WS Error]:`, err.message);
-    });
-
-    // Enviar bienvenida
-    socket.send(JSON.stringify({ status: "ok", message: "Connected" }));
-
-    // Mantener vivo el handler
-    await new Promise((resolve) => {
-        socket.on('close', resolve);
-        socket.on('error', resolve);
-    });
-});
-
-    // API Login
     instance.post('/login', async (req) => {
-        if (req.body.password===API_PASSWORD) {
-            return { token: instance.jwt.sign({ user: 'admin' }) };
-        }
+        if (req.body.password===API_PASSWORD) return { token: instance.jwt.sign({ user: 'admin' }) };
         throw new Error('Invalid Password');
     });
 
     instance.get('/health', async (_req, reply) => {
-        let mongo={ ok: false };
-
-        try {
-            await mongoClient.db(DB_NAME).command({ ping: 1 });
-            mongo={ ok: true };
-        }
-        catch (error) {
-            mongo={ ok: false, error: error.message };
-            reply.code(503);
-        }
-
         return {
-            ok: mongo.ok,
-            mongo,
-            dxCluster: {
-                connected: dxConnected,
-                host: DX_HOST,
-                port: DX_PORT,
-            },
-            buffer: {
-                length: buffer.length,
-                limit: BUFFER_LIMIT,
-                flushIntervalMs: FLUSH_INTERVAL_MS,
-                lastSpotTimestamp,
-            },
-            uptimeSeconds: Math.round(process.uptime()),
+            ok: true,
+            dxCluster: { connected: dxConnected, host: DX_HOST },
+            buffer: { length: buffer.length, lastSpot: lastSpotTimestamp },
+            uptime: Math.round(process.uptime())
         };
     });
 
-    instance.get('/test-ws', async () => {
-    const testMsg = JSON.stringify({ test: "Probando WebSocket", timestamp: new Date() });
-    for (const c of clients) {
-        if (c.readyState === 1) c.send(testMsg);
-    }
-    return { status: "Mensaje de prueba enviado a " + clients.size + " clientes" };
-    });
-
-    // Historical query API (with filters)
+    // API Histórica
     instance.get('/api/spots', { onRequest: [instance.authenticate] }, async (req) => {
-        const {
-            rbn,
-            mode,
-            band,
-            callsign,
-            spotterCountry,
-            spottedCountry,
-            country,
-            spotterPrefix,
-            spottedPrefix,
-            prefix,
-            spotterContinent,
-            spottedContinent,
-            continent,
-            limit,
-        }=req.query;
+        const { mode, band, limit }=req.query;
         let query={};
-        const andClauses=[];
-        if (rbn!==undefined) query.rbn=rbn==='true';
         if (mode) query.mode=mode.toUpperCase();
         if (band) query.band=band;
-        if (callsign) query.spotter={ $regex: callsign, $options: 'i' };
-        if (spotterCountry) query['cty.spotter.data.Country']={ $regex: spotterCountry, $options: 'i' };
-        if (spottedCountry) query['cty.spotted.data.Country']={ $regex: spottedCountry, $options: 'i' };
-        if (spotterPrefix) query['cty.spotter.matchedCallsign']={ $regex: `^${spotterPrefix}`, $options: 'i' };
-        if (spottedPrefix) query['cty.spotted.matchedCallsign']={ $regex: `^${spottedPrefix}`, $options: 'i' };
-        if (spotterContinent) query['cty.spotter.data.Continent']=spotterContinent.toUpperCase();
-        if (spottedContinent) query['cty.spotted.data.Continent']=spottedContinent.toUpperCase();
-
-        if (country) {
-            andClauses.push({
-                $or: [
-                    { 'cty.spotter.data.Country': { $regex: country, $options: 'i' } },
-                    { 'cty.spotted.data.Country': { $regex: country, $options: 'i' } },
-                ],
-            });
-        }
-
-        if (prefix) {
-            andClauses.push({
-                $or: [
-                    { 'cty.spotter.matchedCallsign': { $regex: `^${prefix}`, $options: 'i' } },
-                    { 'cty.spotted.matchedCallsign': { $regex: `^${prefix}`, $options: 'i' } },
-                ],
-            });
-        }
-
-        if (continent) {
-            andClauses.push({
-                $or: [
-                    { 'cty.spotter.data.Continent': continent.toUpperCase() },
-                    { 'cty.spotted.data.Continent': continent.toUpperCase() },
-                ],
-            });
-        }
-
-        if (andClauses.length>0) {
-            query.$and=andClauses;
-        }
-
-        return await spotsCollection.find(query)
-            .sort({ timestamp: -1 })
-            .limit(parseInt(limit)||100)
-            .toArray();
+        return await spotsCollection.find(query).sort({ timestamp: -1 }).limit(parseInt(limit)||100).toArray();
     });
 });
 
-// --- CORE ---
+// --- START ---
 async function start() {
-    // 1. Database
     mongoClient=new MongoClient(MONGO_URL);
     await mongoClient.connect();
     spotsCollection=mongoClient.db(DB_NAME).collection(COLLECTION_NAME);
-
-    // Critical indexes for queries
     await spotsCollection.createIndex({ timestamp: -1 });
-    await spotsCollection.createIndex({ rbn: 1, timestamp: -1 });
-    await spotsCollection.createIndex({ 'cty.spotter.data.Country': 1, timestamp: -1 });
-    await spotsCollection.createIndex({ 'cty.spotted.data.Country': 1, timestamp: -1 });
-    await spotsCollection.createIndex({ 'cty.spotter.matchedCallsign': 1, timestamp: -1 });
-    await spotsCollection.createIndex({ 'cty.spotted.matchedCallsign': 1, timestamp: -1 });
-    await spotsCollection.createIndex({ 'cty.spotter.data.Continent': 1, timestamp: -1 });
-    await spotsCollection.createIndex({ 'cty.spotted.data.Continent': 1, timestamp: -1 });
     await spotsCollection.createIndex({ timestamp: 1 }, { expireAfterSeconds: TTL_SECONDS });
+    
     scheduleBufferFlush();
-
-    // 2. Web Server
     await fastify.listen({ port: SERVER_PORT, host: SERVER_HOST });
     console.log(`🚀 Server running on ${SERVER_HOST}:${SERVER_PORT}`);
-
-    // 3. Telnet Connection
     connectToDxCluster();
 }
 

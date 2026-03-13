@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DX Monitor Live - NKPI4</title>
+    <style>
+        :root {
+            --bg: #0f111a;
+            --card: #1a1c25;
+            --text: #e1e1e6;
+            --accent: #00ff7f;
+            --rbn: #666;
+            --trad: #2196f3;
+        }
+
+        body { 
+            font-family: 'Segoe UI', system-ui, sans-serif; 
+            background: var(--bg); 
+            color: var(--text); 
+            margin: 0; 
+            padding: 20px;
+        }
+
+        .header { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-bottom: 20px; 
+            border-bottom: 2px solid #2d2d3d;
+            padding-bottom: 15px;
+        }
+
+        #status { 
+            padding: 6px 15px; 
+            border-radius: 20px; 
+            font-size: 0.75rem; 
+            font-weight: bold; 
+            letter-spacing: 1px;
+        }
+        .online { background: #1b5e20; color: #4caf50; border: 1px solid #4caf50; }
+        .offline { background: #b71c1c; color: #f44336; border: 1px solid #f44336; }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            background: var(--card);
+            padding: 15px;
+            border-radius: 8px;
+            flex-wrap: wrap;
+        }
+
+        select, input {
+            background: #2d2d3d;
+            color: white;
+            border: 1px solid #444;
+            padding: 8px;
+            border-radius: 4px;
+            outline: none;
+        }
+
+        .table-container {
+            overflow-x: auto;
+            background: var(--card);
+            border-radius: 8px;
+        }
+
+        table { width: 100%; border-collapse: collapse; min-width: 800px; }
+        th { text-align: left; color: #888; font-size: 0.7rem; padding: 15px 10px; text-transform: uppercase; border-bottom: 2px solid #0f111a; }
+        td { padding: 12px 10px; border-bottom: 1px solid #2d2d3d; }
+
+        .freq { font-family: 'Cascadia Code', monospace; font-weight: bold; color: #fff; font-size: 1.2rem; }
+        .band { color: #888; font-size: 0.8rem; }
+        .callsign { font-size: 1.3rem; font-weight: 800; color: var(--accent); }
+        .country { color: #aaa; font-size: 0.85rem; }
+        
+        .mode-label { 
+            font-weight: bold; 
+            padding: 3px 8px; 
+            border-radius: 4px; 
+            background: #000; 
+            font-size: 0.8rem;
+            display: inline-block;
+            min-width: 40px;
+            text-align: center;
+        }
+        .mode-CW { color: #ffae00; border: 1px solid #ffae00; }
+        .mode-FT8 { color: #00d4ff; border: 1px solid #00d4ff; }
+        .mode-SSB { color: #ff00ff; border: 1px solid #ff00ff; }
+        
+        .flag { width: 35px; height: 24px; object-fit: cover; border-radius: 3px; border: 1px solid #444; }
+        
+        .badge { font-size: 0.6rem; padding: 2px 5px; border-radius: 3px; margin-right: 8px; vertical-align: middle; font-weight: bold; }
+        .rbn-type { background: var(--rbn); color: #fff; }
+        .trad-type { background: var(--trad); color: #fff; }
+
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1 style="margin:0; font-size: 1.5rem;">📡 DX SPOTS LIVE</h1>
+        <div id="status" class="offline">DISCONNECTED</div>
+    </div>
+
+    <div class="controls">
+        <select id="filter-band">
+            <option value="all">Todas las Bandas</option>
+            <option value="160m">160m</option>
+            <option value="80m">80m</option>
+            <option value="40m">40m</option>
+            <option value="30m">30m</option>
+            <option value="20m">20m</option>
+            <option value="17m">17m</option>
+            <option value="15m">15m</option>
+            <option value="12m">12m</option>
+            <option value="10m">10m</option>
+            <option value="6m">6m</option>
+        </select>
+
+        <select id="filter-mode">
+            <option value="all">Todos los Modos</option>
+            <option value="CW">CW</option>
+            <option value="SSB">SSB</option>
+            <option value="FT8">FT8</option>
+        </select>
+
+        <select id="filter-type">
+            <option value="all">RBN & Tradicional</option>
+            <option value="rbn">Solo RBN</option>
+            <option value="trad">Solo Tradicional</option>
+        </select>
+        
+        <input type="text" id="filter-call" placeholder="Buscar indicativo...">
+    </div>
+
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Freq / Banda</th>
+                    <th>DX Station / Country</th>
+                    <th>Modo</th>
+                    <th>Spotter</th>
+                    <th>Info / SNR</th>
+                </tr>
+            </thead>
+            <tbody id="spot-list"></tbody>
+        </table>
+    </div>
+
+    <script>
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        
+        const spotList = document.getElementById('spot-list');
+        const status = document.getElementById('status');
+        
+        const fBand = document.getElementById('filter-band');
+        const fMode = document.getElementById('filter-mode');
+        const fType = document.getElementById('filter-type');
+        const fCall = document.getElementById('filter-call');
+
+        let socket;
+
+        function connect() {
+            socket = new WebSocket(wsUrl);
+            
+            socket.onopen = () => { 
+                status.innerText = 'ONLINE'; 
+                status.className = 'online'; 
+            };
+            
+            socket.onclose = () => { 
+                status.innerText = 'OFFLINE'; 
+                status.className = 'offline'; 
+                setTimeout(connect, 2000); 
+            };
+            
+            socket.onmessage = (event) => {
+                const spot = JSON.parse(event.data);
+                if (!spot.spotted) return;
+                createSpotRow(spot);
+            };
+        }
+
+        function createSpotRow(spot) {
+            const row = document.createElement('tr');
+            
+            row.dataset.band = spot.band;
+            row.dataset.mode = spot.mode;
+            row.dataset.type = spot.rbn ? 'rbn' : 'trad';
+            row.dataset.call = spot.spotted.toLowerCase();
+
+            const adif = spot.cty?.spotted?.data?.ADIF;
+            // El servidor sirve las banderas en la ruta /flags/ADIF.svg
+            const flagImg = adif ? `<img src="/flags/${adif}.svg" class="flag" onerror="this.style.display='none'">` : '<div style="width:35px"></div>';
+            
+            row.innerHTML = `
+                <td>
+                    <span class="freq">${spot.freq.toFixed(1)}</span><br>
+                    <span class="band">${spot.band}</span>
+                </td>
+                <td>
+                    <div style="display:flex; align-items:center; gap:15px">
+                        ${flagImg}
+                        <div>
+                            <span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span>
+                            <span class="callsign">${spot.spotted}</span><br>
+                            <span class="country">${spot.cty?.spotted?.data?.Country || 'Unknown'}</span>
+                        </div>
+                    </div>
+                </td>
+                <td><span class="mode-label mode-${spot.mode}">${spot.mode}</span></td>
+                <td>
+                    <strong>${spot.spotter}</strong><br>
+                    <small style="color:#666">${spot.cty?.spotter?.data?.Country || ''}</small>
+                </td>
+                <td style="color:#ccc; font-size:0.9rem">
+                    ${spot.snr ? '<b style="color:#00ff7f">'+spot.snr+' dB</b>' : '<i>'+spot.comment+'</i>'}
+                </td>
+            `;
+            
+            applyFiltersToRow(row);
+            spotList.insertBefore(row, spotList.firstChild);
+            
+            if (spotList.rows.length > 60) {
+                spotList.deleteRow(60);
+            }
+        }
+
+        function applyFiltersToRow(row) {
+            const bandMatch = fBand.value === 'all' || row.dataset.band === fBand.value;
+            const modeMatch = fMode.value === 'all' || row.dataset.mode === fMode.value;
+            const typeMatch = fType.value === 'all' || row.dataset.type === fType.value;
+            const callMatch = fCall.value === '' || row.dataset.call.includes(fCall.value.toLowerCase());
+
+            if (bandMatch && modeMatch && typeMatch && callMatch) {
+                row.classList.remove('hidden');
+            } else {
+                row.classList.add('hidden');
+            }
+        }
+
+        [fBand, fMode, fType, fCall].forEach(el => {
+            el.addEventListener('input', () => {
+                Array.from(spotList.rows).forEach(row => applyFiltersToRow(row));
+            });
+        });
+
+        connect();
+    </script>
+</body>
+</html>
