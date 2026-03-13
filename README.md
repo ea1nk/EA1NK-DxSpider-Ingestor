@@ -16,11 +16,10 @@
 
 # :card_index: DXSpider Ingestor API
 
-Node.js service that ingests DX spots, enriches them with CTY data from `cty_dict.json`, stores them in MongoDB, and exposes:
-
 This repository is designed to run in Docker and is part of the EA1NK-Docker-DxSpider project:
 https://github.com/ea1nk/EA1NK-Docker-DxSpider
 
+Node.js service that ingests DX spots, enriches them with CTY data from `cty_dict.json`, stores them in MongoDB, and exposes:
 - JWT login endpoint
 - Historical query endpoint with filters
 - WebSocket stream for real-time spots
