@@ -151,106 +151,116 @@
         </table>
     </div>
 
-    <script>
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws`;
+   <script>
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    
+    const spotList = document.getElementById('spot-list');
+    const status = document.getElementById('status');
+    
+    // Filtros
+    const fBand = document.getElementById('filter-band');
+    const fMode = document.getElementById('filter-mode');
+    const fType = document.getElementById('filter-type');
+    const fCall = document.getElementById('filter-call');
+
+    let socket;
+    const MAX_SPOTS = 50; // Límite de spots en pantalla
+
+    function connect() {
+        socket = new WebSocket(wsUrl);
         
-        const spotList = document.getElementById('spot-list');
-        const status = document.getElementById('status');
+        socket.onopen = () => { 
+            status.innerText = 'ONLINE'; 
+            status.className = 'online'; 
+        };
         
-        const fBand = document.getElementById('filter-band');
-        const fMode = document.getElementById('filter-mode');
-        const fType = document.getElementById('filter-type');
-        const fCall = document.getElementById('filter-call');
+        socket.onclose = () => { 
+            status.innerText = 'OFFLINE'; 
+            status.className = 'offline'; 
+            setTimeout(connect, 2000); 
+        };
+        
+        socket.onmessage = (event) => {
+            const spot = JSON.parse(event.data);
+            if (!spot.spotted) return;
+            
+            // AGREGAR AL PRINCIPIO (Encolar)
+            renderSpot(spot);
+        };
+    }
 
-        let socket;
+    function renderSpot(spot) {
+        // Creamos el elemento de fila (TR)
+        const row = document.createElement('tr');
+        
+        // Metadatos para los filtros
+        row.dataset.band = spot.band;
+        row.dataset.mode = spot.mode;
+        row.dataset.type = spot.rbn ? 'rbn' : 'trad';
+        row.dataset.call = spot.spotted.toLowerCase();
 
-        function connect() {
-            socket = new WebSocket(wsUrl);
-            
-            socket.onopen = () => { 
-                status.innerText = 'ONLINE'; 
-                status.className = 'online'; 
-            };
-            
-            socket.onclose = () => { 
-                status.innerText = 'OFFLINE'; 
-                status.className = 'offline'; 
-                setTimeout(connect, 2000); 
-            };
-            
-            socket.onmessage = (event) => {
-                const spot = JSON.parse(event.data);
-                if (!spot.spotted) return;
-                createSpotRow(spot);
-            };
-        }
-
-        function createSpotRow(spot) {
-            const row = document.createElement('tr');
-            
-            row.dataset.band = spot.band;
-            row.dataset.mode = spot.mode;
-            row.dataset.type = spot.rbn ? 'rbn' : 'trad';
-            row.dataset.call = spot.spotted.toLowerCase();
-
-            const adif = spot.cty?.spotted?.data?.ADIF;
-            // El servidor sirve las banderas en la ruta /flags/ADIF.svg
-            const flagImg = adif ? `<img src="/flags/${adif}.svg" class="flag" onerror="this.style.display='none'">` : '<div style="width:35px"></div>';
-            
-            row.innerHTML = `
-                <td>
-                    <span class="freq">${spot.freq.toFixed(1)}</span><br>
-                    <span class="band">${spot.band}</span>
-                </td>
-                <td>
-                    <div style="display:flex; align-items:center; gap:15px">
-                        ${flagImg}
-                        <div>
-                            <span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span>
-                            <span class="callsign">${spot.spotted}</span><br>
-                            <span class="country">${spot.cty?.spotted?.data?.Country || 'Unknown'}</span>
-                        </div>
+        const adif = spot.cty?.spotted?.data?.ADIF;
+        const flagImg = adif ? `<img src="/flags/${adif}.svg" class="flag" onerror="this.style.display='none'">` : '<div style="width:35px"></div>';
+        
+        row.innerHTML = `
+            <td>
+                <span class="freq">${spot.freq.toFixed(1)}</span><br>
+                <span class="band">${spot.band}</span>
+            </td>
+            <td>
+                <div style="display:flex; align-items:center; gap:15px">
+                    ${flagImg}
+                    <div>
+                        <span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span>
+                        <span class="callsign">${spot.spotted}</span><br>
+                        <span class="country">${spot.cty?.spotted?.data?.Country || 'Unknown'}</span>
                     </div>
-                </td>
-                <td><span class="mode-label mode-${spot.mode}">${spot.mode}</span></td>
-                <td>
-                    <strong>${spot.spotter}</strong><br>
-                    <small style="color:#666">${spot.cty?.spotter?.data?.Country || ''}</small>
-                </td>
-                <td style="color:#ccc; font-size:0.9rem">
-                    ${spot.snr ? '<b style="color:#00ff7f">'+spot.snr+' dB</b>' : '<i>'+spot.comment+'</i>'}
-                </td>
-            `;
-            
-            applyFiltersToRow(row);
-            spotList.insertBefore(row, spotList.firstChild);
-            
-            if (spotList.rows.length > 60) {
-                spotList.deleteRow(60);
-            }
+                </div>
+            </td>
+            <td><span class="mode-label mode-${spot.mode}">${spot.mode}</span></td>
+            <td>
+                <strong>${spot.spotter}</strong><br>
+                <small style="color:#666">${spot.cty?.spotter?.data?.Country || ''}</small>
+            </td>
+            <td style="color:#ccc; font-size:0.9rem">
+                ${spot.snr ? '<b style="color:#00ff7f">'+spot.snr+' dB</b>' : '<i>'+spot.comment+'</i>'}
+            </td>
+        `;
+        
+        // Aplicamos el filtro antes de insertarlo
+        applyFiltersToRow(row);
+
+        // INSERTAR ARRIBA: insertBefore añade el nuevo elemento al inicio
+        spotList.insertBefore(row, spotList.firstChild);
+
+        // GESTIÓN DEL BUFFER: Si pasamos el límite, borramos el último
+        if (spotList.rows.length > MAX_SPOTS) {
+            spotList.deleteRow(spotList.rows.length - 1);
         }
+    }
 
-        function applyFiltersToRow(row) {
-            const bandMatch = fBand.value === 'all' || row.dataset.band === fBand.value;
-            const modeMatch = fMode.value === 'all' || row.dataset.mode === fMode.value;
-            const typeMatch = fType.value === 'all' || row.dataset.type === fType.value;
-            const callMatch = fCall.value === '' || row.dataset.call.includes(fCall.value.toLowerCase());
+    function applyFiltersToRow(row) {
+        const bandMatch = fBand.value === 'all' || row.dataset.band === fBand.value;
+        const modeMatch = fMode.value === 'all' || row.dataset.mode === fMode.value;
+        const typeMatch = fType.value === 'all' || row.dataset.type === fType.value;
+        const callMatch = fCall.value === '' || row.dataset.call.includes(fCall.value.toLowerCase());
 
-            if (bandMatch && modeMatch && typeMatch && callMatch) {
-                row.classList.remove('hidden');
-            } else {
-                row.classList.add('hidden');
-            }
+        if (bandMatch && modeMatch && typeMatch && callMatch) {
+            row.style.display = ""; // Visible
+        } else {
+            row.style.display = "none"; // Oculto
         }
+    }
 
-        [fBand, fMode, fType, fCall].forEach(el => {
-            el.addEventListener('input', () => {
-                Array.from(spotList.rows).forEach(row => applyFiltersToRow(row));
-            });
+    // Escuchar cambios en los filtros para re-procesar la lista existente
+    [fBand, fMode, fType, fCall].forEach(el => {
+        el.addEventListener('input', () => {
+            Array.from(spotList.rows).forEach(row => applyFiltersToRow(row));
         });
+    });
 
-        connect();
-    </script>
+    connect();
+</script>
 </body>
 </html>
