@@ -25,10 +25,15 @@ const SERVER_PORT=parseInt(process.env.SERVER_PORT, 10)||3000;
 const BUFFER_LIMIT=parseInt(process.env.BUFFER_LIMIT, 10)||15;
 const TTL_SECONDS=parseInt(process.env.TTL_SECONDS, 10)||604800;
 const RECONNECT_DELAY_MS=parseInt(process.env.RECONNECT_DELAY_MS, 10)||10000;
+const FLUSH_INTERVAL_MS=parseInt(process.env.FLUSH_INTERVAL_MS, 10)||5000;
 
 let spotsCollection;
+let mongoClient;
 let buffer=[];
 const clients=new Set(); // For WebSockets
+let flushTimer;
+let dxConnected=false;
+let lastSpotTimestamp=null;
 
 // --- UTILITIES ---
 const getBand=(f) => {
@@ -143,7 +148,12 @@ function normalizeMode(mode) {
 }
 
 function parseSpot(data) {
-    const cleanLine=data.replace(/[\x00-\x1F\x7F-\x9F]/g, "").trim();
+    const cleanLine=data
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&#160;/gi, ' ')
+        .replace(/[\x00-\x1F\x7F-\x9F]/g, "")
+        .replace(/\s+/g, ' ')
+        .trim();
     const regex=/^DX de\s+([^:]+):\s+([\d.]+)\s+(\S+)\s+(.+?)\s+(\d{4})Z$/i;
     const match=cleanLine.match(regex);
 
@@ -155,11 +165,10 @@ function parseSpot(data) {
         const explicitMode=extractExplicitMode(payload);
         const inferredMode=explicitMode||inferMode(freq, payload);
         let mode=normalizeMode(inferredMode);
-        // Never store callsigns in mode, even if malformed upstream data appears.
         if (mode===spotterCallsign||mode===spottedCallsign) mode="UNK";
         const snrMatch=payload.match(/([+-]?\d+)\s*dB\b/i);
         const snr=snrMatch? parseInt(snrMatch[1], 10):null;
-        const isRbn=/\bdB\b|\bWPM\b|\bBPS\b/i.test(payload);
+        const isRbn=/([+-]?\d+)\s*dB\b|\bWPM\b|\bBPS\b/i.test(payload);
         const spotterCty=lookupCallsignInfo(spotterCallsign);
         const spottedCty=lookupCallsignInfo(spottedCallsign);
 
@@ -181,6 +190,67 @@ function parseSpot(data) {
         };
     }
     return null;
+}
+
+async function flushBuffer() {
+    if (!spotsCollection||buffer.length===0) return;
+
+    const batch=[...buffer];
+    buffer=[];
+
+    try {
+        await spotsCollection.insertMany(batch);
+    }
+    catch (error) {
+        buffer=batch.concat(buffer);
+        console.error('Error flushing buffer to MongoDB:', error);
+    }
+}
+
+function scheduleBufferFlush() {
+    if (flushTimer) clearInterval(flushTimer);
+    flushTimer=setInterval(() => {
+        flushBuffer().catch((error) => console.error('Scheduled flush failed:', error));
+    }, FLUSH_INTERVAL_MS);
+}
+
+function connectToDxCluster() {
+    const telnet=new net.Socket();
+    telnet.on('error', (error) => {
+        dxConnected=false;
+        console.error(`DXSpider connection error: ${error.message}`);
+    });
+
+    telnet.connect(DX_PORT, DX_HOST, () => {
+        dxConnected=true;
+        console.log("📡 Connected to DXSpider");
+        telnet.write(`${CALLSIGN}\n`);
+    });
+
+    telnet.on('data', async (data) => {
+        const lines=data.toString().split(/\r?\n/);
+        for (let line of lines) {
+            if (line.includes('DX de')) {
+                const spot=parseSpot(line);
+                if (spot) {
+                    lastSpotTimestamp=spot.timestamp;
+                    const msg=JSON.stringify(spot);
+                    for (const c of clients) if (c.socket.readyState===1) c.socket.send(msg);
+
+                    buffer.push(spot);
+                    if (buffer.length>=BUFFER_LIMIT) {
+                        await flushBuffer();
+                    }
+                }
+            }
+        }
+    });
+
+    telnet.on('close', () => {
+        dxConnected=false;
+        flushBuffer().catch(console.error);
+        setTimeout(connectToDxCluster, RECONNECT_DELAY_MS);
+    });
 }
 
 // --- PLUGIN REGISTRATION ---
@@ -206,6 +276,36 @@ fastify.register(async (instance) => {
             return { token: instance.jwt.sign({ user: 'admin' }) };
         }
         throw new Error('Invalid Password');
+    });
+
+    instance.get('/health', async (_req, reply) => {
+        let mongo={ ok: false };
+
+        try {
+            await mongoClient.db(DB_NAME).command({ ping: 1 });
+            mongo={ ok: true };
+        }
+        catch (error) {
+            mongo={ ok: false, error: error.message };
+            reply.code(503);
+        }
+
+        return {
+            ok: mongo.ok,
+            mongo,
+            dxCluster: {
+                connected: dxConnected,
+                host: DX_HOST,
+                port: DX_PORT,
+            },
+            buffer: {
+                length: buffer.length,
+                limit: BUFFER_LIMIT,
+                flushIntervalMs: FLUSH_INTERVAL_MS,
+                lastSpotTimestamp,
+            },
+            uptimeSeconds: Math.round(process.uptime()),
+        };
     });
 
     // Historical query API (with filters)
@@ -280,9 +380,9 @@ fastify.register(async (instance) => {
 // --- CORE ---
 async function start() {
     // 1. Database
-    const client=new MongoClient(MONGO_URL);
-    await client.connect();
-    spotsCollection=client.db(DB_NAME).collection(COLLECTION_NAME);
+    mongoClient=new MongoClient(MONGO_URL);
+    await mongoClient.connect();
+    spotsCollection=mongoClient.db(DB_NAME).collection(COLLECTION_NAME);
 
     // Critical indexes for queries
     await spotsCollection.createIndex({ timestamp: -1 });
@@ -294,41 +394,14 @@ async function start() {
     await spotsCollection.createIndex({ 'cty.spotter.data.Continent': 1, timestamp: -1 });
     await spotsCollection.createIndex({ 'cty.spotted.data.Continent': 1, timestamp: -1 });
     await spotsCollection.createIndex({ timestamp: 1 }, { expireAfterSeconds: TTL_SECONDS });
+    scheduleBufferFlush();
 
     // 2. Web Server
     await fastify.listen({ port: SERVER_PORT, host: SERVER_HOST });
     console.log(`🚀 Server running on ${SERVER_HOST}:${SERVER_PORT}`);
 
     // 3. Telnet Connection
-    const telnet=new net.Socket();
-    telnet.connect(DX_PORT, DX_HOST, () => {
-        console.log("📡 Connected to DXSpider");
-        telnet.write(`${CALLSIGN}\n`);
-    });
-
-    telnet.on('data', async (data) => {
-        const lines=data.toString().split(/\r?\n/);
-        for (let line of lines) {
-            if (line.includes('DX de')) {
-                const spot=parseSpot(line);
-                if (spot) {
-                    // Immediate broadcast via WS
-                    const msg=JSON.stringify(spot);
-                    for (const c of clients) if (c.socket.readyState===1) c.socket.send(msg);
-
-                    // Buffer for decrease writings to disk and extend drive lifespan
-                    buffer.push(spot);
-                    if (buffer.length>=BUFFER_LIMIT) {
-                        const batch=[...buffer];
-                        buffer=[];
-                        await spotsCollection.insertMany(batch).catch(console.error);
-                    }
-                }
-            }
-        }
-    });
-
-    telnet.on('close', () => setTimeout(start, RECONNECT_DELAY_MS));
+    connectToDxCluster();
 }
 
 start().catch(console.error);
