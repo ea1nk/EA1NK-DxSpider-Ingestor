@@ -14,7 +14,7 @@
 2026 EA1NK-DxSpider-Ingestor
 ```
 
-# :card_index: RBN Ingestor API
+# :card_index: DXSpider Ingestor API
 
 Node.js service that ingests DX spots, enriches them with CTY data from `cty_dict.json`, stores them in MongoDB, and exposes:
 
