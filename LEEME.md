@@ -16,6 +16,9 @@
 
 # :card_index: API del Ingestor DXSpider
 
+Este repositorio esta pensado para ejecutarse en Docker y forma parte del proyecto EA1NK-Docker-DxSpider:
+https://github.com/ea1nk/EA1NK-Docker-DxSpider
+
 Servicio Node.js que ingiere spots DX, los enriquece con datos CTY desde `cty_dict.json`, los guarda en MongoDB y expone:
 
 - Endpoint de login con JWT
