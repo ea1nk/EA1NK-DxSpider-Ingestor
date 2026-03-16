@@ -2,8 +2,12 @@ const fs=require("fs");
 const path=require("path");
 
 const DICT_PATH=path.join(__dirname, "cty_dict.json");
+const EQSL_USERS_PATH=path.join(__dirname, "eqsl-users.txt");
+const LOTW_USERS_PATH=path.join(__dirname, "lotw-users.csv");
 
 let cachedDictionary=null;
+let cachedEqslUsers=null;
+let cachedLotwUsers=null;
 
 function loadDictionary(dictPath=DICT_PATH) {
     if (!cachedDictionary||dictPath!==DICT_PATH) {
@@ -14,18 +18,90 @@ function loadDictionary(dictPath=DICT_PATH) {
     return cachedDictionary;
 }
 
+function loadEqslUsers(filePath=EQSL_USERS_PATH) {
+    if (!cachedEqslUsers||filePath!==EQSL_USERS_PATH) {
+        const raw=fs.readFileSync(filePath, "utf8");
+        const users=new Set();
+
+        for (const line of raw.split(/\r?\n/)) {
+            const token=line.trim().toUpperCase();
+            if (!token||token.startsWith("LIST OF ")) continue;
+            users.add(token);
+        }
+
+        cachedEqslUsers=users;
+    }
+
+    return cachedEqslUsers;
+}
+
+function loadLotwUsers(filePath=LOTW_USERS_PATH) {
+    if (!cachedLotwUsers||filePath!==LOTW_USERS_PATH) {
+        const raw=fs.readFileSync(filePath, "utf8");
+        const users=new Set();
+
+        for (const line of raw.split(/\r?\n/)) {
+            if (!line.trim()) continue;
+            const [callsign]=(line.split(","));
+            const token=(callsign||"").trim().toUpperCase();
+            if (!token) continue;
+            users.add(token);
+        }
+
+        cachedLotwUsers=users;
+    }
+
+    return cachedLotwUsers;
+}
+
+function getCallsignCandidates(callsign) {
+    const normalized=callsign.trim().toUpperCase();
+    const candidates=new Set([normalized]);
+    const withoutPortableSuffix=normalized.replace(/\/(P|M|MM|AM|QRP|B)$/i, "");
+
+    if (withoutPortableSuffix) {
+        candidates.add(withoutPortableSuffix);
+    }
+
+    if (normalized.includes("/")) {
+        const parts=normalized.split("/").filter(Boolean);
+        for (const part of parts) {
+            candidates.add(part);
+            candidates.add(part.replace(/\/(P|M|MM|AM|QRP|B)$/i, ""));
+        }
+    }
+
+    return candidates;
+}
+
+function existsInCallsignSet(callsign, callsignSet) {
+    const candidates=getCallsignCandidates(callsign);
+    for (const candidate of candidates) {
+        if (candidate&&callsignSet.has(candidate)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function lookupCallsignInfo(callsign, dictPath=DICT_PATH) {
     if (typeof callsign!=="string"||!callsign.trim()) {
         throw new Error("The callsign must be a non-empty string.");
     }
 
     const dictionary=loadDictionary(dictPath);
+    const eqslUsers=loadEqslUsers();
+    const lotwUsers=loadLotwUsers();
     const normalized=callsign.trim().toUpperCase();
+    const eqsl=existsInCallsignSet(normalized, eqslUsers);
+    const lotw=existsInCallsignSet(normalized, lotwUsers);
 
     const buildResult=(matchedKey, entry) => ({
         searchedCallsign: normalized,
         matchedCallsign: matchedKey,
         data: entry,
+        eqsl,
+        lotw,
     });
 
     const findLongestPrefix=(token) => {
@@ -85,7 +161,13 @@ function lookupCallsignInfo(callsign, dictPath=DICT_PATH) {
         return buildResult(prefixMatch.key, prefixMatch.entry);
     }
 
-    return null;
+    return {
+        searchedCallsign: normalized,
+        matchedCallsign: null,
+        data: null,
+        eqsl,
+        lotw,
+    };
 }
 
 module.exports={
