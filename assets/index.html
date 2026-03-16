@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DX Monitor Live - NKPI4</title>
+    <style>
+        :root {
+            --bg: #0f111a;
+            --card: #1a1c25;
+            --text: #e1e1e6;
+            --accent: #00ff7f;
+            --rbn: #666;
+            --trad: #2196f3;
+        }
+
+        body { 
+            font-family: 'Segoe UI', system-ui, sans-serif; 
+            background: var(--bg); 
+            color: var(--text); 
+            margin: 0; 
+            padding: 20px;
+        }
+
+        .header { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-bottom: 20px; 
+            border-bottom: 2px solid #2d2d3d;
+            padding-bottom: 15px;
+        }
+
+        #status { 
+            padding: 6px 15px; 
+            border-radius: 20px; 
+            font-size: 0.75rem; 
+            font-weight: bold; 
+            letter-spacing: 1px;
+        }
+        .online { background: #1b5e20; color: #4caf50; border: 1px solid #4caf50; }
+        .offline { background: #b71c1c; color: #f44336; border: 1px solid #f44336; }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            background: var(--card);
+            padding: 15px;
+            border-radius: 8px;
+            flex-wrap: wrap;
+        }
+
+        select, input {
+            background: #2d2d3d;
+            color: white;
+            border: 1px solid #444;
+            padding: 8px;
+            border-radius: 4px;
+            outline: none;
+        }
+
+        .table-container {
+            overflow-x: auto;
+            background: var(--card);
+            border-radius: 8px;
+        }
+
+        table { width: 100%; border-collapse: collapse; min-width: 800px; }
+        th { text-align: left; color: #888; font-size: 0.62rem; padding: 4px 6px; text-transform: uppercase; border-bottom: 2px solid #0f111a; }
+        td { padding: 3px 6px; border-bottom: 1px solid #2d2d3d; font-size: 0.87rem; }
+
+        .freq { font-family: 'Cascadia Code', monospace; font-weight: bold; color: #fff; font-size: 1.05rem; }
+        .band { color: #888; font-size: 0.7rem; }
+        .callsign { font-size: 1.08rem; font-weight: 800; color: var(--accent); }
+        .country { color: #aaa; font-size: 0.78rem; }
+        .mode-label, .banda-label, .qsl-label { font-size: 0.82rem !important; padding: 2px 7px !important; min-width: 32px !important; }
+        
+        .mode-label {
+            font-weight: bold;
+            padding: 3px 10px;
+            border-radius: 4px;
+            background: #222;
+            font-size: 0.9rem;
+            display: inline-block;
+            min-width: 40px;
+            text-align: center;
+            margin: 0 2px;
+            border: 2px solid transparent;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s, border 0.2s, opacity 0.2s;
+        }
+        [class*="mode-"] {
+            /* fallback para modos no definidos arriba */
+            color: #fff;
+            border-color: #888;
+            background: #222;
+        }
+        .qsl-label.desactivado {
+            opacity: 0.3;
+        }
+        .mode-CW { color: #ffae00; border-color: #ffae00; background: #1a1400; }
+        .mode-FT8 { color: #00d4ff; border-color: #00d4ff; background: #00222a; }
+        .mode-FT4 { color: #00e6a8; border-color: #00e6a8; background: #00332a; }
+        .mode-SSB { color: #ff00ff; border-color: #ff00ff; background: #1a002a; }
+        .mode-RTTY { color: #ffb300; border-color: #ffb300; background: #332600; }
+        .mode-PSK { color: #00ffb3; border-color: #00ffb3; background: #00332a; }
+        .mode-DIGI { color: #00ff7f; border-color: #00ff7f; background: #00331a; }
+        .mode-FT4 { color: #00d4ff; border-color: #00d4ff; background: #00222a; }
+        .banda-label, .qsl-label {
+            font-weight: bold;
+            padding: 3px 10px;
+            border-radius: 4px;
+            background: #222;
+            font-size: 0.9rem;
+            display: inline-block;
+            min-width: 40px;
+            text-align: center;
+            margin: 0 2px;
+            border: 2px solid #444;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s, border 0.2s, opacity 0.2s;
+            color:#aaa
+        }
+        .banda-label.selected, .qsl-label.selected {
+            background: #00ff7f22;
+            color: #00ff7f;
+            border-color: #00ff7f;
+            opacity: 1 !important;
+        }
+        .filtros-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 30px;
+        }
+        
+        .flag { width: 35px; height: 24px; object-fit: cover; border-radius: 3px; border: 1px solid #444; }
+        
+        .badge { font-size: 0.6rem; padding: 2px 5px; border-radius: 3px; margin-right: 8px; vertical-align: middle; font-weight: bold; }
+        .rbn-type { background: var(--rbn); color: #fff; }
+        .trad-type { background: var(--trad); color: #fff; }
+
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1 style="margin:0; font-size: 1.5rem;">📡 DX SPOTS LIVE</h1>
+        <div id="status" class="offline">DISCONNECTED</div>
+    </div>
+
+    <div class="controls" style="flex-direction:column; gap:0;">
+        <div style="display:flex; justify-content:flex-end; align-items:center;">
+                        <button id="filtros-toggle" style="margin-bottom:10px; background:var(--card); color:var(--accent); border:none; font-size:1rem; padding:10px 18px 10px 10px; border-radius:6px; cursor:pointer; display:flex; align-items:center; gap:8px;">
+                                <span id="filtros-toggle-svg" style="display:flex; align-items:center;">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5a1 1 0 0 1 1-1h12a1 1 0 0 1 .8 1.6l-4.2 5.6V16a1 1 0 0 1-1.447.894l-2-1A1 1 0 0 1 8 15v-3.8L3.2 6.6A1 1 0 0 1 3 5z" stroke="#00ff7f" stroke-width="1.5" fill="none"/></svg>
+                                </span>
+                                <span id="filtros-toggle-text">Mostrar filtros</span>
+                                <span id="filtros-toggle-icon">▼</span>
+                        </button>
+        </div>
+        <div id="filtros-panel" style="padding:10px 0;"></div>
+        <div id="indicativos-contenedor" style="border:1px solid #444; border-radius:6px; padding:8px 12px; margin:10px 0 0 0; min-height:32px; background: #181a22; display:none;"></div>
+    </div>
+
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 2vw;">Freq / Banda</th>
+                    <th style="width: 10vw;">DX Station / Country</th>
+                    <th style="width: 2vw;">Modo</th>
+                    <th style="width: 5vw;">LoTW / eQSL</th>
+                    <th style="width: 10vw;">Spotter</th>
+                    <th style="width: 15vw;">Info / SNR</th>
+                </tr>
+            </thead>
+            <tbody id="spot-list"></tbody>
+        </table>
+    </div>
+
+   <script src="monitor.js"></script>
+</body>
+</html>
