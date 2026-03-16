@@ -51,6 +51,19 @@ function isTruthyQsl(value) {
     return !!value;
 }
 
+function getNormalizedActiveQslFilters() {
+    const raw = Array.isArray(filtros.qsl) ? filtros.qsl : [];
+    const valid = raw.filter((q) => QSL_FILTERS.includes(q));
+    return [...new Set(valid)];
+}
+
+function getSpotQslFlags(spot) {
+    return {
+        hasLotw: isTruthyQsl(spot?.cty?.spotted?.lotw),
+        hasEqsl: isTruthyQsl(spot?.cty?.spotted?.eqsl),
+    };
+}
+
 // --- Lógica de buffer y renderizado de spots ---
 const MAX_SPOTS = 15;
 const SPOT_BUFFER = 200;
@@ -85,12 +98,12 @@ function filtrarSpots() {
         }
         // Filtro LoTW/eQSL
         let qslMatch = true;
-        if (filtros.qsl && filtros.qsl.length > 0) {
-            const hasLotw = isTruthyQsl(spot.cty?.spotted?.lotw);
-            const hasEqsl = isTruthyQsl(spot.cty?.spotted?.eqsl);
+        const activeQsl = getNormalizedActiveQslFilters();
+        if (activeQsl.length > 0) {
+            const { hasLotw, hasEqsl } = getSpotQslFlags(spot);
 
-            if (filtros.qsl.length === 1) {
-                qslMatch = filtros.qsl.includes('LoTW') ? hasLotw : hasEqsl;
+            if (activeQsl.length === 1) {
+                qslMatch = activeQsl[0] === 'LoTW' ? hasLotw : hasEqsl;
             } else {
                 qslMatch = hasLotw || hasEqsl;
             }
@@ -117,13 +130,14 @@ function crearSpotRow(spot) {
     row.dataset.call = spot.spotted.toLowerCase();
     const adif = spot.cty?.spotted?.data?.ADIF;
     const flagImg = adif ? `<img src="/flags/${adif}.svg" class="flag" onerror="this.style.display='none'">` : '<div style="width:35px"></div>';
+    const { hasLotw, hasEqsl } = getSpotQslFlags(spot);
     row.innerHTML = `
         <td><span class="freq">${spot.freq.toFixed(1)}</span><br><span class="band">${spot.band}</span></td>
         <td><div style="display:flex; align-items:center; gap:15px">${flagImg}<div><span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign" title="Doble clic para abrir en QRZ" style="cursor:pointer;">${spot.spotted}</span><br><span class="country">${spot.cty?.spotted?.data?.Country || 'Unknown'}</span></div></div></td>
         <td><span class="mode-label mode-${spot.mode}">${spot.mode}</span></td>
         <td>
-            <span class="qsl-label ${isTruthyQsl(spot.cty?.spotted?.lotw) ? 'selected' : 'desactivado'}">LoTW</span>
-            <span class="qsl-label ${isTruthyQsl(spot.cty?.spotted?.eqsl) ? 'selected' : 'desactivado'}">eQSL</span></td>
+            <span class="qsl-label ${hasLotw ? 'selected' : 'desactivado'}">LoTW</span>
+            <span class="qsl-label ${hasEqsl ? 'selected' : 'desactivado'}">eQSL</span></td>
         <td><strong>${spot.spotter}</strong><br><small style="color:#666">${spot.cty?.spotter?.data?.Country || ''}</small></td>
         <td style="color:#ccc; font-size:0.9rem">${spot.snr ? '<b style="color:#00ff7f">'+spot.snr+' dB</b>' : '<i>'+spot.comment+'</i>'}</td>
     `;
