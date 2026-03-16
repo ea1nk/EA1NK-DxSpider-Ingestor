@@ -119,7 +119,7 @@ function crearSpotRow(spot) {
     const flagImg = adif ? `<img src="/flags/${adif}.svg" class="flag" onerror="this.style.display='none'">` : '<div style="width:35px"></div>';
     row.innerHTML = `
         <td><span class="freq">${spot.freq.toFixed(1)}</span><br><span class="band">${spot.band}</span></td>
-        <td><div style="display:flex; align-items:center; gap:15px">${flagImg}<div><span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign">${spot.spotted}</span><br><span class="country">${spot.cty?.spotted?.data?.Country || 'Unknown'}</span></div></div></td>
+        <td><div style="display:flex; align-items:center; gap:15px">${flagImg}<div><span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign" title="Doble clic para abrir en QRZ" style="cursor:pointer;">${spot.spotted}</span><br><span class="country">${spot.cty?.spotted?.data?.Country || 'Unknown'}</span></div></div></td>
         <td><span class="mode-label mode-${spot.mode}">${spot.mode}</span></td>
         <td>
             <span class="qsl-label ${isTruthyQsl(spot.cty?.spotted?.lotw) ? 'selected' : 'desactivado'}">LoTW</span>
@@ -127,6 +127,16 @@ function crearSpotRow(spot) {
         <td><strong>${spot.spotter}</strong><br><small style="color:#666">${spot.cty?.spotter?.data?.Country || ''}</small></td>
         <td style="color:#ccc; font-size:0.9rem">${spot.snr ? '<b style="color:#00ff7f">'+spot.snr+' dB</b>' : '<i>'+spot.comment+'</i>'}</td>
     `;
+
+    const callsignEl = row.querySelector('.callsign');
+    if (callsignEl) {
+        callsignEl.addEventListener('dblclick', () => {
+            const targetCall = encodeURIComponent((spot.spotted || '').toUpperCase());
+            if (!targetCall) return;
+            window.open(`https://www.qrz.com/db/${targetCall}`, '_blank', 'noopener,noreferrer');
+        });
+    }
+
     return row;
 }
 
