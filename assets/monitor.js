@@ -12,11 +12,13 @@ const MODOS = [
     'CW', 'SSB', 'FT8', 'FT4', 'RTTY', 'PSK', 'DIGI'
 ];
 const TIPOS = ['RBN', 'TRAD'];
+const QSL_FILTERS = ['LoTW', 'eQSL'];
 
 let filtros = {
     bandas: [...BANDAS],
     modos: [...MODOS],
     tipos: [...TIPOS],
+    qsl: [],
     indicativos: []
 };
 
@@ -28,14 +30,25 @@ function cargarFiltros() {
     if (data) {
         try {
             const loaded = JSON.parse(data);
+            const loadedQsl = Array.isArray(loaded.qsl)
+                ? loaded.qsl.filter((q) => QSL_FILTERS.includes(q))
+                : [];
             filtros = {
                 bandas: loaded.bandas || [...BANDAS],
                 modos: loaded.modos || [...MODOS],
                 tipos: loaded.tipos || [...TIPOS],
+                qsl: loadedQsl,
                 indicativos: loaded.indicativos || []
             };
         } catch {}
     }
+}
+
+function isTruthyQsl(value) {
+    if (typeof value === 'string') {
+        return value.toLowerCase() === 'true';
+    }
+    return !!value;
 }
 
 // --- Lógica de buffer y renderizado de spots ---
@@ -70,8 +83,20 @@ function filtrarSpots() {
                 tipoMatch = !spot.rbn;
             }
         }
+        // Filtro LoTW/eQSL
+        let qslMatch = true;
+        if (filtros.qsl && filtros.qsl.length > 0) {
+            const hasLotw = isTruthyQsl(spot.cty?.spotted?.lotw);
+            const hasEqsl = isTruthyQsl(spot.cty?.spotted?.eqsl);
+
+            if (filtros.qsl.length === 1) {
+                qslMatch = filtros.qsl.includes('LoTW') ? hasLotw : hasEqsl;
+            } else {
+                qslMatch = hasLotw || hasEqsl;
+            }
+        }
         const callMatch = filtros.indicativos.length === 0 || filtros.indicativos.some(call => spot.spotted.toLowerCase().includes(call.toLowerCase()));
-        return bandMatch && modeMatch && tipoMatch && callMatch;
+        return bandMatch && modeMatch && tipoMatch && qslMatch && callMatch;
     });
 }
 
@@ -97,8 +122,8 @@ function crearSpotRow(spot) {
         <td><div style="display:flex; align-items:center; gap:15px">${flagImg}<div><span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign">${spot.spotted}</span><br><span class="country">${spot.cty?.spotted?.data?.Country || 'Unknown'}</span></div></div></td>
         <td><span class="mode-label mode-${spot.mode}">${spot.mode}</span></td>
         <td>
-            <span class="qsl-label qsl-${spot.qsl} desactivado">${spot.lotw || 'LoTW'}</span>
-            <span class="qsl-label qsl-${spot.qsl} desactivado">${spot.eqsl || 'eQSL'}</span></td>
+            <span class="qsl-label ${isTruthyQsl(spot.cty?.spotted?.lotw) ? 'selected' : 'desactivado'}">LoTW</span>
+            <span class="qsl-label ${isTruthyQsl(spot.cty?.spotted?.eqsl) ? 'selected' : 'desactivado'}">eQSL</span></td>
         <td><strong>${spot.spotter}</strong><br><small style="color:#666">${spot.cty?.spotter?.data?.Country || ''}</small></td>
         <td style="color:#ccc; font-size:0.9rem">${spot.snr ? '<b style="color:#00ff7f">'+spot.snr+' dB</b>' : '<i>'+spot.comment+'</i>'}</td>
     `;
@@ -204,6 +229,27 @@ function renderPanelFiltros() {
         );
     });
     row.appendChild(tiposDiv);
+    // QSL (LoTW/eQSL)
+    const qslDiv = document.createElement('div');
+    qslDiv.innerHTML = '<b>QSL:</b> ';
+    QSL_FILTERS.forEach(qsl => {
+        qslDiv.appendChild(
+            crearBotonFiltro(
+                qsl,
+                filtros.qsl.includes(qsl),
+                () => {
+                    if (filtros.qsl.includes(qsl)) filtros.qsl = filtros.qsl.filter(q => q !== qsl);
+                    else filtros.qsl.push(qsl);
+                    guardarFiltros();
+                    renderPanelFiltros();
+                    renderSpots();
+                },
+                '',
+                'banda'
+            )
+        );
+    });
+    row.appendChild(qslDiv);
     // Indicativos
     const indicativosDiv = document.createElement('div');
     indicativosDiv.innerHTML = '<b>Indicativos:</b> ';
