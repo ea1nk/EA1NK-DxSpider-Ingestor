@@ -117,9 +117,15 @@ function filtrarSpots() {
 function renderSpots() {
     const spotList = document.getElementById('spot-list');
     spotList.innerHTML = '';
-    filtrarSpots().slice(0, MAX_SPOTS).forEach(spot => {
+    const filtrados = filtrarSpots();
+    filtrados.slice(0, MAX_SPOTS).forEach(spot => {
         spotList.appendChild(crearSpotRow(spot));
     });
+    const count = document.getElementById('spots-count');
+    if (count) {
+        count.textContent = `${filtrados.length} de ${spotBuffer.length} spots`;
+        count.title = `Se muestran los ${MAX_SPOTS} más recientes que cumplen los filtros`;
+    }
 }
 
 // Los textos vienen del cluster: escapar siempre antes de insertarlos como HTML
@@ -132,19 +138,19 @@ function crearSpotRow(spot) {
     row.dataset.type = spot.rbn ? 'rbn' : 'trad';
     row.dataset.call = spot.spotted.toLowerCase();
     const adif = spot.cty?.spotted?.data?.ADIF;
-    const flagImg = adif ? `<img src="/flags/${encodeURIComponent(adif)}.svg" class="flag" onerror="this.style.display='none'">` : '<div style="width:35px"></div>';
+    const flagImg = adif ? `<img src="/flags/${encodeURIComponent(adif)}.svg" class="flag" alt="" onerror="this.style.visibility='hidden'">` : '<span class="flag-empty"></span>';
     const { hasLotw, hasEqsl } = getSpotQslFlags(spot);
     const timeZ = spot.time_z ? `${spot.time_z.slice(0, 2)}:${spot.time_z.slice(2, 4)}` : '';
+    const country = spot.cty?.spotted?.data?.Country || 'Unknown';
+    const info = spot.snr ? `<span class="snr">${escHtml(spot.snr)} dB</span>` : `<i>${escHtml(spot.comment)}</i>`;
     row.innerHTML = `
         <td class="time-col">${escHtml(timeZ)}</td>
-        <td><span class="freq">${spot.freq.toFixed(1)}</span><br><span class="band">${escHtml(spot.band)}</span></td>
-        <td><div style="display:flex; align-items:center; gap:15px">${flagImg}<div><span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign" title="Doble clic para abrir en QRZ" style="cursor:pointer;">${escHtml(spot.spotted)}</span><br><span class="country">${escHtml(spot.cty?.spotted?.data?.Country || 'Unknown')}</span></div></div></td>
+        <td><span class="freq">${spot.freq.toFixed(1)}</span><span class="band">${escHtml(spot.band)}</span></td>
+        <td><div class="dx">${flagImg}<span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign" title="Doble clic para abrir en QRZ" style="cursor:pointer;">${escHtml(spot.spotted)}</span><span class="country" title="${escHtml(country)}">${escHtml(country)}</span></div></td>
         <td><span class="mode-label mode-${escHtml(spot.mode)}">${escHtml(spot.mode)}</span></td>
-        <td>
-            <span class="qsl-label ${hasLotw ? 'selected' : 'desactivado'}">LoTW</span>
-            <span class="qsl-label ${hasEqsl ? 'selected' : 'desactivado'}">eQSL</span></td>
-        <td><strong>${escHtml(spot.spotter)}</strong><br><small style="color:#666">${escHtml(spot.cty?.spotter?.data?.Country || '')}</small></td>
-        <td style="color:#ccc; font-size:0.9rem">${spot.snr ? '<b style="color:#00ff7f">'+escHtml(spot.snr)+' dB</b>' : '<i>'+escHtml(spot.comment)+'</i>'}</td>
+        <td><span class="qsl-label ${hasLotw ? 'selected' : 'desactivado'}">LoTW</span><span class="qsl-label ${hasEqsl ? 'selected' : 'desactivado'}">eQSL</span></td>
+        <td><span class="spotter">${escHtml(spot.spotter)}</span><span class="spotter-country">${escHtml(spot.cty?.spotter?.data?.Country || '')}</span></td>
+        <td class="info" title="${escHtml(spot.comment)}">${info}</td>
     `;
 
     const callsignEl = row.querySelector('.callsign');
@@ -214,177 +220,168 @@ function crearBotonFiltro(texto, activo, onClick, claseExtra = '', tipo = 'modo'
     const btn = document.createElement('button');
     if (tipo === 'banda') {
         btn.className = 'banda-label' + (activo ? ' selected' : ' desactivado');
-        btn.style.opacity = activo ? '1' : '0.3';
     } else {
         btn.className = `mode-label ${claseExtra}`;
-        btn.style.opacity = activo ? '1' : '0.3';
     }
+    btn.style.opacity = activo ? '1' : '0.3';
+    btn.setAttribute('aria-pressed', activo ? 'true' : 'false');
     btn.textContent = texto;
     btn.onclick = onClick;
     return btn;
 }
 
+// Una lista vacía o completa equivale a "sin filtro" en filtrarSpots()
+const restringe = (lista, total) => lista.length > 0 && lista.length < total;
+
+function aplicarFiltros() {
+    guardarFiltros();
+    renderPanelFiltros();
+    renderSpots();
+}
+
+function toggleEn(lista, valor) {
+    return lista.includes(valor) ? lista.filter(v => v !== valor) : [...lista, valor];
+}
+
+function crearGrupo(titulo, acciones) {
+    const group = document.createElement('div');
+    group.className = 'fgroup';
+    const head = document.createElement('div');
+    head.className = 'fgroup-head';
+    head.innerHTML = `<b>${titulo}</b>`;
+    if (acciones) {
+        const span = document.createElement('span');
+        acciones.forEach(([texto, fn]) => {
+            const b = document.createElement('button');
+            b.className = 'link-btn';
+            b.textContent = texto;
+            b.onclick = fn;
+            span.appendChild(b);
+        });
+        head.appendChild(span);
+    }
+    const body = document.createElement('div');
+    body.className = 'fgroup-body';
+    group.append(head, body);
+    return { group, body };
+}
+
+// Resumen de los filtros activos en la barra (visible aunque el panel esté cerrado)
+function renderResumenFiltros() {
+    const resumen = document.getElementById('filtros-resumen');
+    const badge = document.getElementById('filtros-badge');
+    const reset = document.getElementById('filtros-reset');
+    const lista = (items, max = 4) => items.length > max ? `${items.slice(0, max).join(', ')} +${items.length - max}` : items.join(', ');
+    const chips = [];
+    if (restringe(filtros.bandas, BANDAS.length)) chips.push(`Bandas: <b>${escHtml(lista(BANDAS.filter(b => filtros.bandas.includes(b))))}</b>`);
+    if (restringe(filtros.modos, MODOS.length)) chips.push(`Modos: <b>${escHtml(lista(MODOS.filter(m => filtros.modos.includes(m))))}</b>`);
+    if (filtros.tipos.length === 1) chips.push(`Solo <b>${escHtml(filtros.tipos[0])}</b>`);
+    if (filtros.qsl.length) chips.push(`QSL: <b>${escHtml(filtros.qsl.join(' o '))}</b>`);
+    if (filtros.indicativos.length) chips.push(`Indicativos: <b>${escHtml(lista(filtros.indicativos, 3))}</b>`);
+    resumen.innerHTML = chips.length
+        ? chips.map(c => `<span class="fsum">${c}</span>`).join('')
+        : '<span class="fsum none">Sin filtros: se muestra todo</span>';
+    badge.hidden = chips.length === 0;
+    badge.textContent = chips.length;
+    reset.hidden = chips.length === 0;
+}
+
 function renderPanelFiltros() {
+    renderResumenFiltros();
     const panel = document.getElementById('filtros-panel');
     panel.innerHTML = '';
-    const row = document.createElement('div');
-    row.className = 'filtros-row';
+
     // Bandas
-    const bandasDiv = document.createElement('div');
-    bandasDiv.innerHTML = '<b>Bandas:</b> ';
-    BANDAS.forEach(banda => {
-        bandasDiv.appendChild(
-            crearBotonFiltro(
-                banda,
-                filtros.bandas.includes(banda),
-                () => {
-                    if (filtros.bandas.includes(banda)) filtros.bandas = filtros.bandas.filter(b => b !== banda);
-                    else filtros.bandas.push(banda);
-                    guardarFiltros();
-                    renderPanelFiltros();
-                    renderSpots();
-                },
-                '',
-                'banda'
-            )
-        );
-    });
-    row.appendChild(bandasDiv);
+    const bandas = crearGrupo('Bandas', [['Todas', () => { filtros.bandas = [...BANDAS]; aplicarFiltros(); }]]);
+    BANDAS.forEach(banda => bandas.body.appendChild(crearBotonFiltro(banda, filtros.bandas.includes(banda), () => {
+        filtros.bandas = toggleEn(filtros.bandas, banda);
+        aplicarFiltros();
+    }, '', 'banda')));
+
     // Modos
-    const modosDiv = document.createElement('div');
-    modosDiv.innerHTML = '<b>Modos:</b> ';
-    MODOS.forEach(modo => {
-        modosDiv.appendChild(
-            crearBotonFiltro(
-                modo,
-                filtros.modos.includes(modo),
-                () => {
-                    if (filtros.modos.includes(modo)) filtros.modos = filtros.modos.filter(m => m !== modo);
-                    else filtros.modos.push(modo);
-                    guardarFiltros();
-                    renderPanelFiltros();
-                    renderSpots();
-                },
-                `mode-${modo}`
-            )
-        );
-    });
-    row.appendChild(modosDiv);
-    // Tipos (RBN/TRAD)
-    const tiposDiv = document.createElement('div');
-    tiposDiv.innerHTML = '<b>Origen:</b> ';
-    TIPOS.forEach(tipo => {
-        tiposDiv.appendChild(
-            crearBotonFiltro(
-                tipo,
-                filtros.tipos.includes(tipo),
-                () => {
-                    if (filtros.tipos.includes(tipo)) filtros.tipos = filtros.tipos.filter(t => t !== tipo);
-                    else filtros.tipos.push(tipo);
-                    guardarFiltros();
-                    renderPanelFiltros();
-                    renderSpots();
-                },
-                '', // sin clase extra
-                'banda' // usar estilo banda-label
-            )
-        );
-    });
-    row.appendChild(tiposDiv);
-    // QSL (LoTW/eQSL)
-    const qslDiv = document.createElement('div');
-    qslDiv.innerHTML = '<b>QSL:</b> ';
-    QSL_FILTERS.forEach(qsl => {
-        qslDiv.appendChild(
-            crearBotonFiltro(
-                qsl,
-                filtros.qsl.includes(qsl),
-                () => {
-                    if (filtros.qsl.includes(qsl)) filtros.qsl = filtros.qsl.filter(q => q !== qsl);
-                    else filtros.qsl.push(qsl);
-                    guardarFiltros();
-                    renderPanelFiltros();
-                    renderSpots();
-                },
-                '',
-                'banda'
-            )
-        );
-    });
-    row.appendChild(qslDiv);
-    // Indicativos
-    const indicativosDiv = document.createElement('div');
-    indicativosDiv.innerHTML = '<b>Indicativos:</b> ';
-    // Input para añadir
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.placeholder = 'Añadir indicativo...';
-    input.id = 'input-indicativo';
-    indicativosDiv.appendChild(input);
-    const addBtn = document.createElement('button');
-    addBtn.textContent = 'Monitorizar';
-    addBtn.style.marginLeft = '5px';
-    addBtn.className = 'banda-label';
-    addBtn.onclick = () => {
-        const val = input.value.trim().toUpperCase();
-        if (val && !filtros.indicativos.includes(val)) {
-            filtros.indicativos.push(val);
-            guardarFiltros();
-            renderPanelFiltros();
-            renderSpots();
+    const modos = crearGrupo('Modos', [['Todos', () => { filtros.modos = [...MODOS]; aplicarFiltros(); }]]);
+    MODOS.forEach(modo => modos.body.appendChild(crearBotonFiltro(modo, filtros.modos.includes(modo), () => {
+        filtros.modos = toggleEn(filtros.modos, modo);
+        aplicarFiltros();
+    }, `mode-${modo}`)));
+
+    // Origen y QSL en un mismo grupo
+    const origen = crearGrupo('Origen y QSL');
+    TIPOS.forEach(tipo => origen.body.appendChild(crearBotonFiltro(tipo, filtros.tipos.includes(tipo), () => {
+        filtros.tipos = toggleEn(filtros.tipos, tipo);
+        aplicarFiltros();
+    }, '', 'banda')));
+    const sep = document.createElement('span');
+    sep.style.width = '10px';
+    origen.body.appendChild(sep);
+    QSL_FILTERS.forEach(qsl => origen.body.appendChild(crearBotonFiltro(qsl, filtros.qsl.includes(qsl), () => {
+        filtros.qsl = toggleEn(filtros.qsl, qsl);
+        aplicarFiltros();
+    }, '', 'banda')));
+    const hint = document.createElement('div');
+    hint.className = 'fhint';
+    hint.style.width = '100%';
+    hint.textContent = 'QSL: muestra solo estaciones que usan LoTW / eQSL.';
+    origen.body.appendChild(hint);
+
+    // Indicativos monitorizados
+    const calls = crearGrupo('Indicativos', filtros.indicativos.length ? [['Quitar todos', () => { filtros.indicativos = []; aplicarFiltros(); }]] : null);
+    const form = document.createElement('form');
+    form.className = 'call-input';
+    form.innerHTML = '<input type="text" id="input-indicativo" placeholder="Ej. EA1NK, VP8…" autocomplete="off"><button type="submit" class="banda-label">Añadir</button>';
+    form.onsubmit = (e) => {
+        e.preventDefault();
+        const input = form.querySelector('input');
+        // Admite varios separados por comas o espacios
+        const nuevos = input.value.toUpperCase().split(/[\s,;]+/).filter(Boolean)
+            .filter(c => !filtros.indicativos.includes(c));
+        if (nuevos.length) {
+            filtros.indicativos = [...filtros.indicativos, ...nuevos];
+            aplicarFiltros();
+            document.getElementById('input-indicativo')?.focus();
         }
         input.value = '';
     };
-    indicativosDiv.appendChild(addBtn);
-    // Botones de indicativos ahora van en el contenedor externo
-    row.appendChild(indicativosDiv);
-    panel.appendChild(row);
-
-    // Renderizar los indicativos en el nuevo contenedor externo
-    const contenedor = document.getElementById('indicativos-contenedor');
-    if (contenedor) {
-        contenedor.innerHTML = '';
-        if (filtros.indicativos.length === 0) {
-            contenedor.innerHTML = '<span style="color:#888;">No hay indicativos monitorizados.</span>';
-        } else {
-            filtros.indicativos.forEach(call => {
-                contenedor.appendChild(
-                    crearBotonFiltro(
-                        call,
-                        true,
-                        () => {
-                            filtros.indicativos = filtros.indicativos.filter(c => c !== call);
-                            guardarFiltros();
-                            renderPanelFiltros();
-                            renderSpots();
-                        },
-                        'mode-CW'
-                    )
-                );
-            });
-        }
+    calls.body.appendChild(form);
+    if (filtros.indicativos.length === 0) {
+        const vacio = document.createElement('span');
+        vacio.className = 'fhint';
+        vacio.textContent = 'Ninguno: se muestran todos los indicativos.';
+        calls.body.appendChild(vacio);
     }
+    filtros.indicativos.forEach(call => {
+        const chip = document.createElement('span');
+        chip.className = 'call-chip';
+        chip.innerHTML = `${escHtml(call)}<button type="button" aria-label="Quitar ${escHtml(call)}">×</button>`;
+        chip.querySelector('button').onclick = () => {
+            filtros.indicativos = filtros.indicativos.filter(c => c !== call);
+            aplicarFiltros();
+        };
+        calls.body.appendChild(chip);
+    });
+
+    panel.append(bandas.group, modos.group, origen.group, calls.group);
 }
 
-// --- Panel colapsable ---
+// --- Panel desplegable (recuerda si estaba abierto) ---
+const FILTERS_OPEN_KEY = 'dxmonitor-filtros-abierto';
+
 function setupColapsable() {
     const toggle = document.getElementById('filtros-toggle');
     const panel = document.getElementById('filtros-panel');
-    const text = document.getElementById('filtros-toggle-text');
-    const icon = document.getElementById('filtros-toggle-icon');
     let abierto = false;
-    const contenedor = document.getElementById('indicativos-contenedor');
-    toggle.onclick = () => {
-        abierto = !abierto;
-        panel.style.display = abierto ? 'block' : 'none';
-        if (contenedor) contenedor.style.display = abierto ? 'block' : 'none';
-        text.textContent = abierto ? 'Ocultar filtros' : 'Mostrar filtros';
-        icon.textContent = abierto ? '▲' : '▼';
+    try { abierto = localStorage.getItem(FILTERS_OPEN_KEY) === '1'; } catch (_) { /* ignore */ }
+    const aplicar = () => {
+        panel.hidden = !abierto;
+        toggle.setAttribute('aria-expanded', abierto ? 'true' : 'false');
+        try { localStorage.setItem(FILTERS_OPEN_KEY, abierto ? '1' : '0'); } catch (_) { /* ignore */ }
     };
-    panel.style.display = 'none';
-    if (contenedor) contenedor.style.display = 'none';
-    text.textContent = 'Mostrar filtros';
-    icon.textContent = '▼';
+    toggle.onclick = () => { abierto = !abierto; aplicar(); };
+    document.getElementById('filtros-reset').onclick = () => {
+        filtros = { bandas: [...BANDAS], modos: [...MODOS], tipos: [...TIPOS], qsl: [], indicativos: [] };
+        aplicarFiltros();
+    };
+    aplicar();
 }
 
 // --- Inicialización ---

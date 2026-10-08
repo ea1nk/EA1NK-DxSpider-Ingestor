@@ -157,6 +157,53 @@
         .trad-type { background: var(--trad); color: #fff; }
 
         .hidden { display: none; }
+        [hidden] { display: none !important; }
+
+        /* --- Tabla compacta: una línea por spot --- */
+        .spots-table { min-width: 760px; }
+        .spots-table td { padding: 3px 8px; font-size: 0.8rem; white-space: nowrap; height: 26px; }
+        .spots-table th { padding: 6px 8px; }
+        .spots-table tbody tr:hover { background: #ffffff06; }
+        .spots-table .freq { font-size: 0.88rem; }
+        .spots-table .band { font-size: 0.68rem; margin-left: 6px; }
+        .spots-table .dx { display: flex; align-items: center; gap: 8px; min-width: 0; }
+        .spots-table .flag { width: 22px; height: 15px; border-radius: 2px; flex: none; }
+        .spots-table .flag-empty { width: 22px; flex: none; }
+        .spots-table .badge { margin-right: 0; font-size: 0.55rem; padding: 1px 4px; }
+        .spots-table .callsign { font-size: 0.92rem; }
+        .spots-table .country { font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; max-width: 170px; }
+        .spots-table .mode-label { font-size: 0.68rem !important; padding: 1px 6px !important; min-width: 34px !important; border-width: 1px; margin: 0; }
+        .spots-table .qsl-label { font-size: 0.62rem !important; padding: 0 5px !important; min-width: 0 !important; border-width: 1px; margin: 0 1px; }
+        .spots-table .spotter { font-weight: 700; }
+        .spots-table .spotter-country { color: #666; font-size: 0.7rem; margin-left: 6px; }
+        .spots-table .info { color: #ccc; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
+        .spots-table .snr { color: var(--accent); font-weight: 700; }
+
+        /* --- Filtros --- */
+        .filters { background: var(--card); border-radius: 8px; margin-bottom: 12px; }
+        .filters-bar { display: flex; align-items: center; gap: 10px; padding: 8px 10px; flex-wrap: wrap; }
+        .filters-toggle { display: inline-flex; align-items: center; gap: 7px; background: #22252f; color: var(--accent); border: 1px solid #333747; border-radius: 6px; padding: 6px 12px; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+        .filters-toggle:hover { border-color: var(--accent); }
+        .filters-toggle .chev { transition: transform 0.2s; color: var(--muted); }
+        .filters-toggle[aria-expanded="true"] .chev { transform: rotate(180deg); }
+        .filters-badge { background: var(--accent); color: #0f111a; border-radius: 10px; font-size: 0.7rem; padding: 0 7px; line-height: 1.5; }
+        .filters-summary { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; }
+        .fsum { background: #22252f; border: 1px solid #333747; color: #ccc; border-radius: 12px; padding: 2px 9px; font-size: 0.72rem; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+        .fsum b { color: #fff; font-weight: 600; }
+        .fsum.none { color: var(--muted); border-style: dashed; }
+        .filters-count { color: var(--muted); font-size: 0.75rem; white-space: nowrap; }
+        .link-btn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 0.75rem; padding: 2px 4px; }
+        .link-btn:hover { text-decoration: underline; }
+        .filters-panel { border-top: 1px solid var(--line); padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 14px 20px; }
+        .fgroup-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+        .fgroup-head b { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; color: #aaa; }
+        .fgroup-body { display: flex; flex-wrap: wrap; gap: 5px; }
+        .filters-panel .mode-label, .filters-panel .banda-label { font-size: 0.75rem !important; padding: 3px 9px !important; min-width: 0 !important; margin: 0; }
+        .call-input { display: flex; gap: 6px; width: 100%; margin-bottom: 6px; }
+        .call-input input { flex: 1; min-width: 0; padding: 5px 8px; font-size: 0.8rem; text-transform: uppercase; }
+        .call-chip { display: inline-flex; align-items: center; gap: 4px; background: #1a1400; color: #ffae00; border: 1px solid #ffae00; border-radius: 12px; padding: 1px 4px 1px 9px; font-size: 0.75rem; font-weight: 700; }
+        .call-chip button { background: none; border: none; color: inherit; cursor: pointer; font-size: 0.85rem; line-height: 1; padding: 0 4px; }
+        .fhint { color: var(--muted); font-size: 0.72rem; }
 
         /* --- Dashboard --- */
         .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 10px; }
@@ -254,6 +301,8 @@
         }
         @media (max-width: 600px) {
             body { padding: 12px 16px; }
+            .filters-summary { order: 5; flex-basis: 100%; }
+            .filters-count { margin-left: auto; }
             .tile-value { font-size: 1.3rem; }
             .clock b { font-size: 1.1rem; }
         }
@@ -290,31 +339,32 @@
     <div class="layout">
     <div class="main-col">
 
-    <div class="controls" style="flex-direction:column; gap:0;">
-        <div style="display:flex; justify-content:flex-end; align-items:center;">
-                        <button id="filtros-toggle" style="margin-bottom:10px; background:var(--card); color:var(--accent); border:none; font-size:1rem; padding:10px 18px 10px 10px; border-radius:6px; cursor:pointer; display:flex; align-items:center; gap:8px;">
-                                <span id="filtros-toggle-svg" style="display:flex; align-items:center;">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5a1 1 0 0 1 1-1h12a1 1 0 0 1 .8 1.6l-4.2 5.6V16a1 1 0 0 1-1.447.894l-2-1A1 1 0 0 1 8 15v-3.8L3.2 6.6A1 1 0 0 1 3 5z" stroke="#00ff7f" stroke-width="1.5" fill="none"/></svg>
-                                </span>
-                                <span id="filtros-toggle-text">Mostrar filtros</span>
-                                <span id="filtros-toggle-icon">▼</span>
-                        </button>
+    <div class="filters">
+        <div class="filters-bar">
+            <button id="filtros-toggle" class="filters-toggle" aria-expanded="false" aria-controls="filtros-panel">
+                <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 5a1 1 0 0 1 1-1h12a1 1 0 0 1 .8 1.6l-4.2 5.6V16a1 1 0 0 1-1.447.894l-2-1A1 1 0 0 1 8 15v-3.8L3.2 6.6A1 1 0 0 1 3 5z" stroke="currentColor" stroke-width="1.6"/></svg>
+                <span>Filtros</span>
+                <span id="filtros-badge" class="filters-badge" hidden></span>
+                <span id="filtros-toggle-icon" class="chev" aria-hidden="true">▾</span>
+            </button>
+            <div id="filtros-resumen" class="filters-summary"></div>
+            <span id="spots-count" class="filters-count"></span>
+            <button id="filtros-reset" class="link-btn" hidden>Restablecer</button>
         </div>
-        <div id="filtros-panel" style="padding:10px 0;"></div>
-        <div id="indicativos-contenedor" style="border:1px solid #444; border-radius:6px; padding:8px 12px; margin:10px 0 0 0; min-height:32px; background: #181a22; display:none;"></div>
+        <div id="filtros-panel" class="filters-panel" hidden></div>
     </div>
 
     <div class="table-container">
-        <table>
+        <table class="spots-table">
             <thead>
                 <tr>
-                    <th style="width: 1vw;">UTC</th>
-                    <th style="width: 2vw;">Freq / Banda</th>
-                    <th style="width: 6vw;">DX Station / Country</th>
-                    <th style="width: 2vw;">Modo</th>
-                    <th style="width: 4vw;">LoTW / eQSL</th>
-                    <th style="width: 6vw;">Spotter</th>
-                    <th style="width: 15vw;">Info / SNR</th>
+                    <th>UTC</th>
+                    <th>Frecuencia</th>
+                    <th>DX / Entidad</th>
+                    <th>Modo</th>
+                    <th>QSL</th>
+                    <th>Spotter</th>
+                    <th>Info / SNR</th>
                 </tr>
             </thead>
             <tbody id="spot-list"></tbody>
@@ -364,7 +414,7 @@
         <span id="sources-updated"></span>
     </footer>
 
-    <script src="monitor.js?v=20261008b"></script>
+    <script src="monitor.js?v=20261008c"></script>
     <script src="dashboard.js?v=20261008"></script>
 </body>
 </html>
