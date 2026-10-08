@@ -70,6 +70,10 @@ curl "http://localhost:3000/api/spots?country=Spain&prefix=EA&continent=EU" \
 No es un endpoint REST para abrir en el navegador como pagina.
 Es una conexion WebSocket persistente: te conectas una vez y recibes mensajes JSON cada vez que entra un spot nuevo.
 
+Además de los spots, el servidor envía dos mensajes de control (sin campo `spotted`):
+- `{"type":"history","spots":[...]}` nada más conectar, con los últimos spots (del más antiguo al más reciente), para recuperar los perdidos durante una desconexión.
+- `{"type":"ping","t":...}` cada 30 s. Si no llega nada en ~75 s, la conexión está muerta y hay que reconectar.
+
 Ejemplo con `wscat`:
 
 ```bash

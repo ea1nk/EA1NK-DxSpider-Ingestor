@@ -155,17 +155,50 @@ function crearSpotRow(spot) {
 }
 
 // --- WebSocket y actualización de spots ---
+// The server sends a heartbeat every 30s; silence longer than this means a dead connection
+const WS_WATCHDOG_MS = 75000;
+const spotKey = s => `${s.spotter}|${s.spotted}|${s.freq}|${s.timestamp}`;
+
+// Merge the server's recent history, skipping spots already on screen
+function mergeHistory(spots) {
+    const known = new Set(spotBuffer.map(spotKey));
+    const nuevos = spots.filter(s => s.spotted && !known.has(spotKey(s)));
+    if (!nuevos.length) return;
+    spotBuffer = spotBuffer.concat(nuevos)
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+        .slice(0, SPOT_BUFFER);
+    renderSpots();
+}
+
 function conectarWS() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws`;
     const status = document.getElementById('status');
     let socket = new WebSocket(wsUrl);
-    socket.onopen = () => { status.innerText = 'ONLINE'; status.className = 'online'; };
-    socket.onclose = () => { status.innerText = 'OFFLINE'; status.className = 'offline'; setTimeout(conectarWS, 2000); };
+    let watchdog;
+    let cerrado = false;
+
+    const reconectar = () => {
+        if (cerrado) return;
+        cerrado = true;
+        clearTimeout(watchdog);
+        status.innerText = 'OFFLINE'; status.className = 'offline';
+        try { socket.close(); } catch (_) { /* ignore */ }
+        setTimeout(conectarWS, 2000);
+    };
+    const resetWatchdog = () => {
+        clearTimeout(watchdog);
+        watchdog = setTimeout(reconectar, WS_WATCHDOG_MS);
+    };
+
+    socket.onopen = () => { status.innerText = 'ONLINE'; status.className = 'online'; resetWatchdog(); };
+    socket.onclose = reconectar;
     socket.onmessage = (event) => {
-        const spot = JSON.parse(event.data);
-        if (!spot.spotted) return;
-        spotBuffer.unshift(spot);
+        resetWatchdog();
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'history') return mergeHistory(msg.spots || []);
+        if (!msg.spotted) return;
+        spotBuffer.unshift(msg);
         if (spotBuffer.length > SPOT_BUFFER) spotBuffer.pop();
         renderSpots();
     };

@@ -47,6 +47,10 @@ Environment variables and constants currently used in `ingestor.js`:
 - `PRIMARY_CHECK_INTERVAL_MS` (how often to check the primary while on backup, default: `300000`)
 - `CONNECT_TIMEOUT_MS` (default: `15000`)
 - `INACTIVITY_TIMEOUT_MS` (reconnect if no data is received, default: `300000`)
+- `HEALTH_GRACE_MS` (`/health` returns 503 once the cluster has been down this long, default: `120000`)
+- `MAX_BUFFER` (max spots kept in memory while MongoDB is unavailable, default: `5000`)
+- `RECENT_SPOTS_LIMIT` (recent spots sent to WebSocket clients on connect, default: `200`)
+- `WS_HEARTBEAT_MS` (WebSocket heartbeat interval, default: `30000`)
 - `CALLSIGN` (default placeholder: `TU_CALLSIGN`)
 - `SECRET_KEY` (JWT signing key)
 - `API_PASSWORD` (password for `/login`)
@@ -114,6 +118,10 @@ curl -H "Authorization: Bearer <token>" \
 Real-time stream of parsed/enriched spots.
 
 Each message is a JSON spot document.
+
+Besides spots, the server sends two control messages (they have no `spotted` field):
+- `{"type":"history","spots":[...]}` right after connecting, with the latest spots (oldest first), to recover what was missed while disconnected.
+- `{"type":"ping","t":...}` every 30 s. If nothing arrives for ~75 s, treat the connection as dead and reconnect.
 
 ## Stored document shape
 

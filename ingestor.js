@@ -35,6 +35,12 @@ const RECONNECT_DELAY_MS=parseInt(process.env.RECONNECT_DELAY_MS, 10)||10000;
 const FLUSH_INTERVAL_MS=parseInt(process.env.FLUSH_INTERVAL_MS, 10)||5000;
 const CONNECT_TIMEOUT_MS=parseInt(process.env.CONNECT_TIMEOUT_MS, 10)||15000;
 const INACTIVITY_TIMEOUT_MS=parseInt(process.env.INACTIVITY_TIMEOUT_MS, 10)||300000;
+const MAX_BUFFER=parseInt(process.env.MAX_BUFFER, 10)||5000;
+const RECENT_SPOTS_LIMIT=parseInt(process.env.RECENT_SPOTS_LIMIT, 10)||200;
+const WS_HEARTBEAT_MS=parseInt(process.env.WS_HEARTBEAT_MS, 10)||30000;
+const WS_MAX_BUFFERED_BYTES=1024 * 1024;
+const HEALTH_GRACE_MS=parseInt(process.env.HEALTH_GRACE_MS, 10)||120000;
+const MONGO_RETRY_MS=5000;
 
 let spotsCollection;
 let mongoClient;
@@ -42,6 +48,9 @@ let buffer=[];
 const clients=new Set(); 
 let flushTimer;
 let dxConnected=false;
+let dxDisconnectedSince=Date.now();
+// Latest spots, sent to WebSocket clients when they (re)connect
+const recentSpots=[];
 // Primary node and optional backup nodes
 // DX_HOST_BACKUP accepts several comma-separated nodes: "host1,host2:7300"
 const dxNodes=[{ name: 'principal', host: DX_HOST, port: DX_PORT }];
@@ -286,7 +295,15 @@ async function flushBuffer() {
     const batch=[...buffer];
     buffer=[];
     try { await spotsCollection.insertMany(batch); }
-    catch (error) { buffer=batch.concat(buffer); console.error('DB Flush Error:', error); }
+    catch (error) {
+        buffer=batch.concat(buffer);
+        // Keep memory bounded while MongoDB is down: drop the oldest spots
+        if (buffer.length>MAX_BUFFER) {
+            console.warn(`Buffer full, dropping ${buffer.length-MAX_BUFFER} oldest spots`);
+            buffer=buffer.slice(-MAX_BUFFER);
+        }
+        console.error('DB Flush Error:', error.message);
+    }
 }
 
 function scheduleBufferFlush() {
@@ -311,6 +328,13 @@ function closeDxSocket(socket) {
     setTimeout(() => socket.destroy(), 3000).unref();
 }
 
+function broadcast(msg) {
+    for (const c of clients) {
+        // Skip slow clients until they drain their send queue
+        if (c.readyState === 1 && c.bufferedAmount < WS_MAX_BUFFERED_BYTES) c.send(msg);
+    }
+}
+
 async function handleDxLine(line) {
     // A prompt without a trailing newline may precede the spot
     const start = line.indexOf('DX de');
@@ -322,9 +346,9 @@ async function handleDxLine(line) {
     lastSpotTimestamp = spot.timestamp;
     const msg = JSON.stringify(spot);
 
-    for (const c of clients) {
-        if (c.readyState === 1) c.send(msg);
-    }
+    recentSpots.push(spot);
+    if (recentSpots.length > RECENT_SPOTS_LIMIT) recentSpots.shift();
+    broadcast(msg);
 
     buffer.push(spot);
     if (buffer.length >= BUFFER_LIMIT) await flushBuffer();
@@ -404,6 +428,7 @@ function connectToDxCluster() {
     telnet.connect(node.port, node.host, () => {
         connected = true;
         dxConnected = true;
+        dxDisconnectedSince = null;
         telnet.setTimeout(INACTIVITY_TIMEOUT_MS);
         console.log(`📡 Conectado al DXSpider (${node.name})`);
         telnet.write(`${CALLSIGN}\n`);
@@ -434,6 +459,7 @@ function connectToDxCluster() {
         if (dxSocket !== telnet) return; // Old socket already replaced
         dxSocket = null;
         dxConnected = false;
+        if (dxDisconnectedSince === null) dxDisconnectedSince = Date.now();
         if (shuttingDown) return;
         // A session that received spots does not count as a failure
         if (gotSpot) consecutiveFailures = 0;
@@ -469,7 +495,11 @@ fastify.register(async (instance) => {
     // WebSocket Channel
     instance.get('/ws', { websocket: true }, async (connection, req) => {
         clients.add(connection);
+        connection.isAlive = true;
+        connection.on('pong', () => { connection.isAlive = true; });
         connection.send(JSON.stringify({ status: "ok", message: "Connected" }));
+        // Recent history so clients recover spots missed while disconnected
+        connection.send(JSON.stringify({ type: 'history', spots: recentSpots }));
         
         connection.on('close', () => clients.delete(connection));
         connection.on('error', (err) => console.error(`[WS Error]:`, err.message));
@@ -486,8 +516,11 @@ fastify.register(async (instance) => {
     });
 
     instance.get('/health', async (_req, reply) => {
+        // Unhealthy if the cluster has been down longer than the grace period
+        const clusterDown = !dxConnected && Date.now() - dxDisconnectedSince > HEALTH_GRACE_MS;
+        if (clusterDown) reply.code(503);
         return {
-            ok: true,
+            ok: !clusterDown,
             dxCluster: {
                 connected: dxConnected,
                 node: dxNodes[activeNode].name,
@@ -495,6 +528,7 @@ fastify.register(async (instance) => {
                 port: dxNodes[activeNode].port
             },
             buffer: { length: buffer.length, lastSpot: lastSpotTimestamp },
+            wsClients: clients.size,
             uptime: Math.round(process.uptime())
         };
     });
@@ -509,10 +543,42 @@ fastify.register(async (instance) => {
     });
 });
 
+// WebSocket heartbeat: ping frames detect dead clients; the JSON ping keeps
+// proxies from closing idle connections and lets browsers detect silent drops
+function startWsHeartbeat() {
+    setInterval(() => {
+        const ping = JSON.stringify({ type: 'ping', t: Date.now() });
+        for (const c of clients) {
+            if (!c.isAlive) {
+                clients.delete(c);
+                c.terminate();
+                continue;
+            }
+            c.isAlive = false;
+            try { c.ping(); } catch (_) { /* ignore */ }
+            if (c.readyState === 1) c.send(ping);
+        }
+    }, WS_HEARTBEAT_MS).unref();
+}
+
+// MongoDB may still be starting (e.g. after a reboot): retry until it answers
+async function connectMongo() {
+    for (;;) {
+        mongoClient=new MongoClient(MONGO_URL, { serverSelectionTimeoutMS: 10000 });
+        try {
+            await mongoClient.connect();
+            return;
+        } catch (err) {
+            console.error(`MongoDB not available (${err.message}), retrying in ${MONGO_RETRY_MS / 1000}s...`);
+            await mongoClient.close().catch(() => {});
+            await new Promise(r => setTimeout(r, MONGO_RETRY_MS));
+        }
+    }
+}
+
 // --- START ---
 async function start() {
-    mongoClient=new MongoClient(MONGO_URL);
-    await mongoClient.connect();
+    await connectMongo();
     spotsCollection=mongoClient.db(DB_NAME).collection(COLLECTION_NAME);
     await spotsCollection.createIndex({ timestamp: -1 });
     await spotsCollection.createIndex({ timestamp: 1 }, { expireAfterSeconds: TTL_SECONDS });
@@ -520,6 +586,7 @@ async function start() {
     scheduleBufferFlush();
     await fastify.listen({ port: SERVER_PORT, host: SERVER_HOST });
     console.log(`🚀 Server running on ${SERVER_HOST}:${SERVER_PORT}`);
+    startWsHeartbeat();
     connectToDxCluster();
     startPrimaryCheck();
 }
@@ -537,4 +604,8 @@ async function shutdown(signal) {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-start().catch(console.error);
+start().catch((err) => {
+    // Exit so Docker restarts the container instead of leaving it half started
+    console.error('Startup failed:', err);
+    process.exit(1);
+});

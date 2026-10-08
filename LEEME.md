@@ -48,6 +48,10 @@ Variables de entorno y constantes usadas en `ingestor.js`:
 - `PRIMARY_CHECK_INTERVAL_MS` (cada cuánto se comprueba el principal mientras se usa el respaldo, por defecto: `300000`)
 - `CONNECT_TIMEOUT_MS` (por defecto: `15000`)
 - `INACTIVITY_TIMEOUT_MS` (reconecta si no llegan datos, por defecto: `300000`)
+- `HEALTH_GRACE_MS` (`/health` devuelve 503 si el cluster lleva este tiempo caído, por defecto: `120000`)
+- `MAX_BUFFER` (máximo de spots en memoria mientras MongoDB no está disponible, por defecto: `5000`)
+- `RECENT_SPOTS_LIMIT` (spots recientes enviados a los clientes WebSocket al conectar, por defecto: `200`)
+- `WS_HEARTBEAT_MS` (intervalo del heartbeat del WebSocket, por defecto: `30000`)
 - `CALLSIGN` (placeholder por defecto: `TU_CALLSIGN`)
 - `SECRET_KEY` (clave de firma JWT)
 - `API_PASSWORD` (password para `/login`)
@@ -115,6 +119,10 @@ curl -H "Authorization: Bearer <token>" \
 Canal en tiempo real de spots parseados/enriquecidos.
 
 Cada mensaje es un documento spot en JSON.
+
+Además de los spots, el servidor envía dos mensajes de control (sin campo `spotted`):
+- `{"type":"history","spots":[...]}` nada más conectar, con los últimos spots (del más antiguo al más reciente), para recuperar los perdidos durante una desconexión.
+- `{"type":"ping","t":...}` cada 30 s. Si no llega nada en ~75 s, la conexión está muerta y hay que reconectar.
 
 ## Estructura del documento en MongoDB
 
