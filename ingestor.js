@@ -42,8 +42,8 @@ let buffer=[];
 const clients=new Set(); 
 let flushTimer;
 let dxConnected=false;
-// Nodo principal y, opcionalmente, de respaldo
-// DX_HOST_BACKUP admite varios nodos separados por comas: "host1,host2:7300"
+// Primary node and optional backup nodes
+// DX_HOST_BACKUP accepts several comma-separated nodes: "host1,host2:7300"
 const dxNodes=[{ name: 'principal', host: DX_HOST, port: DX_PORT }];
 DX_HOST_BACKUP.split(',').map(h => h.trim()).filter(Boolean).forEach((entry, i) => {
     const [host, port]=entry.split(':');
@@ -295,24 +295,24 @@ function scheduleBufferFlush() {
 }
 
 function scheduleReconnect() {
-    if (reconnectTimer || shuttingDown) return; // Una sola reconexión pendiente
+    if (reconnectTimer || shuttingDown) return; // Only one pending reconnection
     reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         connectToDxCluster();
     }, RECONNECT_DELAY_MS);
 }
 
-// Cierre ordenado: 'bye' para que el cluster libere la sesión, y destroy como respaldo
+// Graceful close: send 'bye' so the cluster frees the session, destroy as fallback
 function closeDxSocket(socket) {
     if (!socket || socket.destroyed) return;
     try {
         if (socket.writable) socket.end('bye\n');
-    } catch (_) { /* ignorar */ }
+    } catch (_) { /* ignore */ }
     setTimeout(() => socket.destroy(), 3000).unref();
 }
 
 async function handleDxLine(line) {
-    // Un prompt sin salto de línea puede quedar delante del spot
+    // A prompt without a trailing newline may precede the spot
     const start = line.indexOf('DX de');
     if (start === -1) return;
     const spot = parseSpot(line.slice(start));
@@ -331,7 +331,7 @@ async function handleDxLine(line) {
     return true;
 }
 
-// Cambia de nodo tras FAILOVER_ATTEMPTS fallos seguidos
+// Switch node after FAILOVER_ATTEMPTS consecutive failures
 function registerFailure() {
     consecutiveFailures++;
     if (dxNodes.length < 2 || consecutiveFailures < FAILOVER_ATTEMPTS) return;
@@ -341,7 +341,7 @@ function registerFailure() {
     console.warn(`⚠️ Cambiando al nodo ${node.name} (${node.host}:${node.port})`);
 }
 
-// Comprueba si el principal acepta conexiones TCP (sin hacer login)
+// Check whether a node accepts TCP connections (without logging in)
 function probeNode(node) {
     return new Promise((resolve) => {
         const probe = net.connect(node.port, node.host);
@@ -352,7 +352,7 @@ function probeNode(node) {
     });
 }
 
-// Mientras se usa el respaldo, vuelve al principal en cuanto esté disponible
+// While on a backup node, return to the primary as soon as it is available
 function startPrimaryCheck() {
     if (primaryCheckTimer || dxNodes.length < 2) return;
     primaryCheckTimer = setInterval(async () => {
@@ -371,7 +371,7 @@ function startPrimaryCheck() {
 
 function connectToDxCluster() {
     if (shuttingDown) return;
-    // Nunca más de una conexión viva
+    // Never more than one live connection
     if (dxSocket) {
         const old = dxSocket;
         dxSocket = null;
@@ -386,8 +386,8 @@ function connectToDxCluster() {
     let gotSpot = false;
     const node = dxNodes[activeNode];
 
-    telnet.setKeepAlive(true, 60000); // Detecta conexiones muertas a nivel TCP
-    telnet.setTimeout(CONNECT_TIMEOUT_MS); // Timeout de conexión; luego, de inactividad
+    telnet.setKeepAlive(true, 60000); // Detect dead connections at TCP level
+    telnet.setTimeout(CONNECT_TIMEOUT_MS); // Connect timeout; becomes inactivity timeout once connected
 
     telnet.on('timeout', () => {
         console.error(connected
@@ -411,13 +411,13 @@ function connectToDxCluster() {
     });
 
     telnet.on('data', async (data) => {
-        // Las líneas pueden llegar partidas entre paquetes TCP
+        // Lines may be split across TCP packets
         const lines = (pending + data.toString()).split(/\r?\n/);
         pending = lines.pop();
         if (pending.length > 4096) pending = '';
 
         for (const line of lines) {
-            // Mostrar las primeras líneas tras conectar (login, rechazos, etc.)
+            // Log the first lines after connecting (login, rejections, etc.)
             if (loginLines < 15 && line.trim() && !line.includes('DX de')) {
                 loginLines++;
                 console.log(`[cluster] ${line.trim()}`);
@@ -431,11 +431,11 @@ function connectToDxCluster() {
     });
 
     telnet.on('close', () => {
-        if (dxSocket !== telnet) return; // Socket antiguo ya reemplazado
+        if (dxSocket !== telnet) return; // Old socket already replaced
         dxSocket = null;
         dxConnected = false;
         if (shuttingDown) return;
-        // Una sesión que llegó a recibir spots no cuenta como fallo
+        // A session that received spots does not count as a failure
         if (gotSpot) consecutiveFailures = 0;
         else registerFailure();
         console.warn(`Conexión cerrada, reconectando en ${RECONNECT_DELAY_MS / 1000}s...`);
@@ -499,7 +499,7 @@ fastify.register(async (instance) => {
         };
     });
 
-    // API Histórica
+    // Historical API
     instance.get('/api/spots', { onRequest: [instance.authenticate] }, async (req) => {
         const { mode, band, limit }=req.query;
         let query={};
@@ -524,14 +524,14 @@ async function start() {
     startPrimaryCheck();
 }
 
-// Cierre limpio (docker stop/restart): avisar al cluster para no dejar sesiones colgadas
+// Clean shutdown (docker stop/restart): notify the cluster to avoid stale sessions
 async function shutdown(signal) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`${signal} recibido, cerrando...`);
     clearTimeout(reconnectTimer);
     closeDxSocket(dxSocket);
-    try { await flushBuffer(); } catch (_) { /* ignorar */ }
+    try { await flushBuffer(); } catch (_) { /* ignore */ }
     setTimeout(() => process.exit(0), 1000);
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
