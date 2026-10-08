@@ -292,6 +292,9 @@
         });
     }
 
+    // Los textos vienen del cluster: escapar siempre antes de insertarlos como HTML
+    const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
     function renderSpotRow(spot) {
         const row = document.createElement('tr');
         row.dataset.band = spot.band;
@@ -300,30 +303,30 @@
         row.dataset.call = spot.spotted.toLowerCase();
 
         const adif = spot.cty?.spotted?.data?.ADIF;
-        const flagImg = adif ? `<img src="/flags/${adif}.svg" class="flag" onerror="this.style.display='none'">` : '<div style="width:35px"></div>';
+        const flagImg = adif ? `<img src="/flags/${encodeURIComponent(adif)}.svg" class="flag" onerror="this.style.display='none'">` : '<div style="width:35px"></div>';
 
         row.innerHTML = `
             <td>
                 <span class="freq">${spot.freq.toFixed(1)}</span><br>
-                <span class="band">${spot.band}</span>
+                <span class="band">${escHtml(spot.band)}</span>
             </td>
             <td>
                 <div style="display:flex; align-items:center; gap:15px">
                     ${flagImg}
                     <div>
                         <span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span>
-                        <span class="callsign">${spot.spotted}</span><br>
-                        <span class="country">${spot.cty?.spotted?.data?.Country || 'Unknown'}</span>
+                        <span class="callsign">${escHtml(spot.spotted)}</span><br>
+                        <span class="country">${escHtml(spot.cty?.spotted?.data?.Country || 'Unknown')}</span>
                     </div>
                 </div>
             </td>
-            <td><span class="mode-label mode-${spot.mode}">${spot.mode}</span></td>
+            <td><span class="mode-label mode-${escHtml(spot.mode)}">${escHtml(spot.mode)}</span></td>
             <td>
-                <strong>${spot.spotter}</strong><br>
-                <small style="color:#666">${spot.cty?.spotter?.data?.Country || ''}</small>
+                <strong>${escHtml(spot.spotter)}</strong><br>
+                <small style="color:#666">${escHtml(spot.cty?.spotter?.data?.Country || '')}</small>
             </td>
             <td style="color:#ccc; font-size:0.9rem">
-                ${spot.snr ? '<b style="color:#00ff7f">'+spot.snr+' dB</b>' : '<i>'+spot.comment+'</i>'}
+                ${spot.snr ? '<b style="color:#00ff7f">'+escHtml(spot.snr)+' dB</b>' : '<i>'+escHtml(spot.comment)+'</i>'}
             </td>
         `;
         spotList.appendChild(row);

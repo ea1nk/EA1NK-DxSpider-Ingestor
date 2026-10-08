@@ -52,6 +52,7 @@ Variables de entorno y constantes usadas en `ingestor.js`:
 - `MAX_BUFFER` (máximo de spots en memoria mientras MongoDB no está disponible, por defecto: `5000`)
 - `RECENT_SPOTS_LIMIT` (spots recientes enviados a los clientes WebSocket al conectar, por defecto: `200`)
 - `WS_HEARTBEAT_MS` (intervalo del heartbeat del WebSocket, por defecto: `30000`)
+- `SPACE_WEATHER_REFRESH_MS` (intervalo de actualización de los datos de propagación, por defecto: `900000`)
 - `CALLSIGN` (placeholder por defecto: `TU_CALLSIGN`)
 - `SECRET_KEY` (clave de firma JWT)
 - `API_PASSWORD` (password para `/login`)
@@ -114,6 +115,19 @@ curl -H "Authorization: Bearer <token>" \
 curl -H "Authorization: Bearer <token>" \
   "http://localhost:3000/api/spots?prefix=EA&continent=EU"
 ```
+
+### `GET /api/space-weather` (público)
+Índices solares y datos de propagación, actualizados cada 15 minutos (`SPACE_WEATHER_REFRESH_MS`) desde fuentes abiertas y cacheados en el servidor:
+- `hamqsl`: N0NBH / HamQSL (SFI, SSN, A, K, rayos X, viento solar, condiciones HF día/noche, fenómenos VHF, ruido, MUF)
+- `kp`: Kp planetario de NOAA, últimos 3 días
+- `xray`: flujo de rayos X GOES (0,1-0,8 nm), últimas 6 horas, clase actual y máxima
+- `windSpeed`, `windMag`: velocidad del viento solar e IMF Bt/Bz (NOAA)
+- `scales`: escalas NOAA R/S/G y previsión a 3 días
+- `daily`: SFI y número de manchas diarios, últimos 30 días (NOAA)
+- `sources`: estado y última actualización de cada fuente
+
+### `GET /api/activity` (público)
+Actividad de spots en los últimos 60 minutos a partir de los spots guardados: `total` y recuentos por `bands`, `modes`, `countries` e indicativos (`calls`). Cacheado 60 s.
 
 ### `GET /ws` (websocket)
 Canal en tiempo real de spots parseados/enriquecidos.

@@ -65,7 +65,7 @@ function getSpotQslFlags(spot) {
 }
 
 // --- Lógica de buffer y renderizado de spots ---
-const MAX_SPOTS = 15;
+const MAX_SPOTS = 30;
 const SPOT_BUFFER = 200;
 let spotBuffer = [];
 
@@ -122,6 +122,9 @@ function renderSpots() {
     });
 }
 
+// Los textos vienen del cluster: escapar siempre antes de insertarlos como HTML
+const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
 function crearSpotRow(spot) {
     const row = document.createElement('tr');
     row.dataset.band = spot.band;
@@ -129,17 +132,19 @@ function crearSpotRow(spot) {
     row.dataset.type = spot.rbn ? 'rbn' : 'trad';
     row.dataset.call = spot.spotted.toLowerCase();
     const adif = spot.cty?.spotted?.data?.ADIF;
-    const flagImg = adif ? `<img src="/flags/${adif}.svg" class="flag" onerror="this.style.display='none'">` : '<div style="width:35px"></div>';
+    const flagImg = adif ? `<img src="/flags/${encodeURIComponent(adif)}.svg" class="flag" onerror="this.style.display='none'">` : '<div style="width:35px"></div>';
     const { hasLotw, hasEqsl } = getSpotQslFlags(spot);
+    const timeZ = spot.time_z ? `${spot.time_z.slice(0, 2)}:${spot.time_z.slice(2, 4)}` : '';
     row.innerHTML = `
-        <td><span class="freq">${spot.freq.toFixed(1)}</span><br><span class="band">${spot.band}</span></td>
-        <td><div style="display:flex; align-items:center; gap:15px">${flagImg}<div><span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign" title="Doble clic para abrir en QRZ" style="cursor:pointer;">${spot.spotted}</span><br><span class="country">${spot.cty?.spotted?.data?.Country || 'Unknown'}</span></div></div></td>
-        <td><span class="mode-label mode-${spot.mode}">${spot.mode}</span></td>
+        <td class="time-col">${escHtml(timeZ)}</td>
+        <td><span class="freq">${spot.freq.toFixed(1)}</span><br><span class="band">${escHtml(spot.band)}</span></td>
+        <td><div style="display:flex; align-items:center; gap:15px">${flagImg}<div><span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign" title="Doble clic para abrir en QRZ" style="cursor:pointer;">${escHtml(spot.spotted)}</span><br><span class="country">${escHtml(spot.cty?.spotted?.data?.Country || 'Unknown')}</span></div></div></td>
+        <td><span class="mode-label mode-${escHtml(spot.mode)}">${escHtml(spot.mode)}</span></td>
         <td>
             <span class="qsl-label ${hasLotw ? 'selected' : 'desactivado'}">LoTW</span>
             <span class="qsl-label ${hasEqsl ? 'selected' : 'desactivado'}">eQSL</span></td>
-        <td><strong>${spot.spotter}</strong><br><small style="color:#666">${spot.cty?.spotter?.data?.Country || ''}</small></td>
-        <td style="color:#ccc; font-size:0.9rem">${spot.snr ? '<b style="color:#00ff7f">'+spot.snr+' dB</b>' : '<i>'+spot.comment+'</i>'}</td>
+        <td><strong>${escHtml(spot.spotter)}</strong><br><small style="color:#666">${escHtml(spot.cty?.spotter?.data?.Country || '')}</small></td>
+        <td style="color:#ccc; font-size:0.9rem">${spot.snr ? '<b style="color:#00ff7f">'+escHtml(spot.snr)+' dB</b>' : '<i>'+escHtml(spot.comment)+'</i>'}</td>
     `;
 
     const callsignEl = row.querySelector('.callsign');

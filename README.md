@@ -51,6 +51,7 @@ Environment variables and constants currently used in `ingestor.js`:
 - `MAX_BUFFER` (max spots kept in memory while MongoDB is unavailable, default: `5000`)
 - `RECENT_SPOTS_LIMIT` (recent spots sent to WebSocket clients on connect, default: `200`)
 - `WS_HEARTBEAT_MS` (WebSocket heartbeat interval, default: `30000`)
+- `SPACE_WEATHER_REFRESH_MS` (refresh interval for propagation data, default: `900000`)
 - `CALLSIGN` (default placeholder: `TU_CALLSIGN`)
 - `SECRET_KEY` (JWT signing key)
 - `API_PASSWORD` (password for `/login`)
@@ -113,6 +114,19 @@ curl -H "Authorization: Bearer <token>" \
 curl -H "Authorization: Bearer <token>" \
   "http://localhost:3000/api/spots?prefix=EA&continent=EU"
 ```
+
+### `GET /api/space-weather` (public)
+Solar indices and propagation data, refreshed every 15 minutes (`SPACE_WEATHER_REFRESH_MS`) from open sources and cached by the server:
+- `hamqsl`: N0NBH / HamQSL (SFI, SSN, A, K, X-ray, solar wind, HF band conditions day/night, VHF phenomena, noise, MUF)
+- `kp`: NOAA planetary Kp, last 3 days
+- `xray`: GOES X-ray flux (0.1-0.8 nm), last 6 hours, current and max class
+- `windSpeed`, `windMag`: solar wind speed and IMF Bt/Bz (NOAA)
+- `scales`: NOAA R/S/G scales and 3-day forecast
+- `daily`: daily SFI and sunspot number, last 30 days (NOAA)
+- `sources`: per-source status and last update
+
+### `GET /api/activity` (public)
+Spot activity over the last 60 minutes from stored spots: `total`, and counts by `bands`, `modes`, `countries` and spotted `calls`. Cached for 60 s.
 
 ### `GET /ws` (websocket)
 Real-time stream of parsed/enriched spots.

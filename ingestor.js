@@ -11,6 +11,7 @@ const websocket=require('@fastify/websocket');
 const jwt=require('@fastify/jwt');
 const fp = require('fastify-plugin');
 const { lookupCallsignInfo }=require('./callsignLookup');
+const { startSpaceWeather, getSpaceWeather }=require('./spaceWeather');
 const path = require('path');
 
 // --- CONFIGURATION ---
@@ -533,6 +534,12 @@ fastify.register(async (instance) => {
         };
     });
 
+    // Solar indices and propagation conditions (cached from open data sources)
+    instance.get('/api/space-weather', async () => getSpaceWeather());
+
+    // Spot activity over the last ACTIVITY_WINDOW_MIN minutes, computed from stored spots
+    instance.get('/api/activity', async () => getActivity());
+
     // Historical API
     instance.get('/api/spots', { onRequest: [instance.authenticate] }, async (req) => {
         const { mode, band, limit }=req.query;
@@ -542,6 +549,44 @@ fastify.register(async (instance) => {
         return await spotsCollection.find(query).sort({ timestamp: -1 }).limit(parseInt(limit)||100).toArray();
     });
 });
+
+const ACTIVITY_WINDOW_MIN=60;
+const ACTIVITY_CACHE_MS=60 * 1000;
+let activityCache={ at: 0, data: null };
+
+async function getActivity() {
+    if (activityCache.data && Date.now() - activityCache.at < ACTIVITY_CACHE_MS) return activityCache.data;
+    const since=new Date(Date.now() - ACTIVITY_WINDOW_MIN * 60 * 1000);
+    const top=(field, limit) => [
+        { $group: { _id: field, count: { $sum: 1 } } },
+        { $match: { _id: { $ne: null } } },
+        { $sort: { count: -1 } },
+        { $limit: limit }
+    ];
+    const [result]=await spotsCollection.aggregate([
+        { $match: { timestamp: { $gte: since } } },
+        { $facet: {
+            total: [{ $count: 'count' }],
+            bands: top('$band', 20),
+            modes: top('$mode', 10),
+            countries: top('$cty.spotted.data.Country', 10),
+            calls: top('$spotted', 10)
+        } }
+    ]).toArray();
+    const toList=(rows) => rows.map(r => ({ name: r._id, count: r.count }));
+    activityCache={
+        at: Date.now(),
+        data: {
+            windowMinutes: ACTIVITY_WINDOW_MIN,
+            total: result.total[0]?.count || 0,
+            bands: toList(result.bands),
+            modes: toList(result.modes),
+            countries: toList(result.countries),
+            calls: toList(result.calls)
+        }
+    };
+    return activityCache.data;
+}
 
 // WebSocket heartbeat: ping frames detect dead clients; the JSON ping keeps
 // proxies from closing idle connections and lets browsers detect silent drops
@@ -587,6 +632,7 @@ async function start() {
     await fastify.listen({ port: SERVER_PORT, host: SERVER_HOST });
     console.log(`🚀 Server running on ${SERVER_HOST}:${SERVER_PORT}`);
     startWsHeartbeat();
+    startSpaceWeather();
     connectToDxCluster();
     startPrimaryCheck();
 }
