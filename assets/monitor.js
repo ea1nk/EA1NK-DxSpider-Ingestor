@@ -5,7 +5,7 @@
 const FILTERS_KEY = 'dxmonitor-filtros';
 
 const BANDAS = [
-    '160m','80m','40m','30m','20m','17m','15m','12m','10m','6m'
+    '160m','80m','60m','40m','30m','20m','17m','15m','12m','10m','6m'
 ];
 
 const MODOS = [
