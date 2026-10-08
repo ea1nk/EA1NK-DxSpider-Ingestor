@@ -123,7 +123,7 @@ function renderSpots() {
     });
     const count = document.getElementById('spots-count');
     if (count) {
-        count.textContent = `${filtrados.length} de ${spotBuffer.length} spots`;
+        count.innerHTML = `<b>${filtrados.length}</b> de ${spotBuffer.length} spots`;
         count.title = `Se muestran los ${MAX_SPOTS} más recientes que cumplen los filtros`;
     }
 }
@@ -216,16 +216,19 @@ function conectarWS() {
 }
 
 // --- UI de filtros ---
-function crearBotonFiltro(texto, activo, onClick, claseExtra = '', tipo = 'modo') {
+// Color de cada chip (los modos mantienen su color de la tabla)
+const CHIP_COLORS = {
+    CW: '#ffae00', SSB: '#ff00ff', FT8: '#00d4ff', FT4: '#00e6a8', RTTY: '#ffb300', PSK: '#00ffb3', DIGI: '#00ff7f',
+    RBN: '#9aa0b4', TRAD: '#2196f3', LoTW: '#00ff7f', eQSL: '#00ff7f'
+};
+
+function crearChip(texto, activo, onClick, { dot = false, mono = false } = {}) {
     const btn = document.createElement('button');
-    if (tipo === 'banda') {
-        btn.className = 'banda-label' + (activo ? ' selected' : ' desactivado');
-    } else {
-        btn.className = `mode-label ${claseExtra}`;
-    }
-    btn.style.opacity = activo ? '1' : '0.3';
+    btn.type = 'button';
+    btn.className = 'fchip' + (mono ? ' mono' : '');
+    btn.style.setProperty('--c', CHIP_COLORS[texto] || 'var(--accent)');
     btn.setAttribute('aria-pressed', activo ? 'true' : 'false');
-    btn.textContent = texto;
+    btn.innerHTML = `${dot ? '<i class="dot"></i>' : ''}${escHtml(texto)}`;
     btn.onclick = onClick;
     return btn;
 }
@@ -243,92 +246,102 @@ function toggleEn(lista, valor) {
     return lista.includes(valor) ? lista.filter(v => v !== valor) : [...lista, valor];
 }
 
-function crearGrupo(titulo, acciones) {
-    const group = document.createElement('div');
+function crearGrupo(titulo, contador, acciones) {
+    const group = document.createElement('section');
     group.className = 'fgroup';
     const head = document.createElement('div');
     head.className = 'fgroup-head';
-    head.innerHTML = `<b>${titulo}</b>`;
-    if (acciones) {
-        const span = document.createElement('span');
-        acciones.forEach(([texto, fn]) => {
-            const b = document.createElement('button');
-            b.className = 'link-btn';
-            b.textContent = texto;
-            b.onclick = fn;
-            span.appendChild(b);
-        });
-        head.appendChild(span);
-    }
+    head.innerHTML = `<b>${titulo}</b>${contador ? `<span class="fcount">${contador}</span>` : ''}<span class="fspacer"></span>`;
+    (acciones || []).forEach(([texto, fn]) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'link-btn';
+        b.textContent = texto;
+        b.onclick = fn;
+        head.appendChild(b);
+    });
     const body = document.createElement('div');
     body.className = 'fgroup-body';
     group.append(head, body);
     return { group, body };
 }
 
-// Resumen de los filtros activos en la barra (visible aunque el panel esté cerrado)
+// Resumen de los filtros activos en la barra; cada uno se puede quitar con su ×
 function renderResumenFiltros() {
     const resumen = document.getElementById('filtros-resumen');
     const badge = document.getElementById('filtros-badge');
     const reset = document.getElementById('filtros-reset');
     const lista = (items, max = 4) => items.length > max ? `${items.slice(0, max).join(', ')} +${items.length - max}` : items.join(', ');
-    const chips = [];
-    if (restringe(filtros.bandas, BANDAS.length)) chips.push(`Bandas: <b>${escHtml(lista(BANDAS.filter(b => filtros.bandas.includes(b))))}</b>`);
-    if (restringe(filtros.modos, MODOS.length)) chips.push(`Modos: <b>${escHtml(lista(MODOS.filter(m => filtros.modos.includes(m))))}</b>`);
-    if (filtros.tipos.length === 1) chips.push(`Solo <b>${escHtml(filtros.tipos[0])}</b>`);
-    if (filtros.qsl.length) chips.push(`QSL: <b>${escHtml(filtros.qsl.join(' o '))}</b>`);
-    if (filtros.indicativos.length) chips.push(`Indicativos: <b>${escHtml(lista(filtros.indicativos, 3))}</b>`);
-    resumen.innerHTML = chips.length
-        ? chips.map(c => `<span class="fsum">${c}</span>`).join('')
-        : '<span class="fsum none">Sin filtros: se muestra todo</span>';
-    badge.hidden = chips.length === 0;
-    badge.textContent = chips.length;
-    reset.hidden = chips.length === 0;
+    const activos = [];
+    if (restringe(filtros.bandas, BANDAS.length)) activos.push(['Bandas', lista(BANDAS.filter(b => filtros.bandas.includes(b))), () => { filtros.bandas = [...BANDAS]; }]);
+    if (restringe(filtros.modos, MODOS.length)) activos.push(['Modos', lista(MODOS.filter(m => filtros.modos.includes(m))), () => { filtros.modos = [...MODOS]; }]);
+    if (filtros.tipos.length === 1) activos.push(['Origen', `solo ${filtros.tipos[0]}`, () => { filtros.tipos = [...TIPOS]; }]);
+    if (filtros.qsl.length) activos.push(['QSL', filtros.qsl.join(' o '), () => { filtros.qsl = []; }]);
+    if (filtros.indicativos.length) activos.push(['Indicativos', lista(filtros.indicativos, 3), () => { filtros.indicativos = []; }]);
+
+    resumen.innerHTML = '';
+    if (!activos.length) {
+        resumen.innerHTML = '<span class="fsum-empty">Mostrando todos los spots</span>';
+    }
+    activos.forEach(([label, valor, limpiar]) => {
+        const chip = document.createElement('span');
+        chip.className = 'fsum';
+        chip.innerHTML = `<span class="fsum-label">${escHtml(label)}</span><span class="fsum-value" title="${escHtml(valor)}">${escHtml(valor)}</span><button type="button" aria-label="Quitar filtro de ${escHtml(label)}">×</button>`;
+        chip.querySelector('button').onclick = () => { limpiar(); aplicarFiltros(); };
+        resumen.appendChild(chip);
+    });
+    badge.hidden = activos.length === 0;
+    badge.textContent = activos.length;
+    reset.hidden = activos.length === 0;
 }
 
 function renderPanelFiltros() {
     renderResumenFiltros();
     const panel = document.getElementById('filtros-panel');
     panel.innerHTML = '';
+    const n = (lista, total) => `${lista.length && lista.length <= total ? lista.length : total}/${total}`;
 
     // Bandas
-    const bandas = crearGrupo('Bandas', [['Todas', () => { filtros.bandas = [...BANDAS]; aplicarFiltros(); }]]);
-    BANDAS.forEach(banda => bandas.body.appendChild(crearBotonFiltro(banda, filtros.bandas.includes(banda), () => {
+    const bandas = crearGrupo('Bandas', n(filtros.bandas, BANDAS.length), [['Todas', () => { filtros.bandas = [...BANDAS]; aplicarFiltros(); }]]);
+    BANDAS.forEach(banda => bandas.body.appendChild(crearChip(banda, filtros.bandas.includes(banda), () => {
         filtros.bandas = toggleEn(filtros.bandas, banda);
         aplicarFiltros();
-    }, '', 'banda')));
+    }, { mono: true })));
 
     // Modos
-    const modos = crearGrupo('Modos', [['Todos', () => { filtros.modos = [...MODOS]; aplicarFiltros(); }]]);
-    MODOS.forEach(modo => modos.body.appendChild(crearBotonFiltro(modo, filtros.modos.includes(modo), () => {
+    const modos = crearGrupo('Modos', n(filtros.modos, MODOS.length), [['Todos', () => { filtros.modos = [...MODOS]; aplicarFiltros(); }]]);
+    MODOS.forEach(modo => modos.body.appendChild(crearChip(modo, filtros.modos.includes(modo), () => {
         filtros.modos = toggleEn(filtros.modos, modo);
         aplicarFiltros();
-    }, `mode-${modo}`)));
+    }, { dot: true })));
 
-    // Origen y QSL en un mismo grupo
+    // Origen y QSL
     const origen = crearGrupo('Origen y QSL');
-    TIPOS.forEach(tipo => origen.body.appendChild(crearBotonFiltro(tipo, filtros.tipos.includes(tipo), () => {
+    TIPOS.forEach(tipo => origen.body.appendChild(crearChip(tipo, filtros.tipos.includes(tipo), () => {
         filtros.tipos = toggleEn(filtros.tipos, tipo);
         aplicarFiltros();
-    }, '', 'banda')));
+    }, { dot: true })));
     const sep = document.createElement('span');
-    sep.style.width = '10px';
+    sep.className = 'fsep';
     origen.body.appendChild(sep);
-    QSL_FILTERS.forEach(qsl => origen.body.appendChild(crearBotonFiltro(qsl, filtros.qsl.includes(qsl), () => {
+    QSL_FILTERS.forEach(qsl => origen.body.appendChild(crearChip(qsl, filtros.qsl.includes(qsl), () => {
         filtros.qsl = toggleEn(filtros.qsl, qsl);
         aplicarFiltros();
-    }, '', 'banda')));
-    const hint = document.createElement('div');
+    })));
+    const hint = document.createElement('p');
     hint.className = 'fhint';
-    hint.style.width = '100%';
-    hint.textContent = 'QSL: muestra solo estaciones que usan LoTW / eQSL.';
+    hint.textContent = 'QSL: solo estaciones que usan LoTW / eQSL.';
     origen.body.appendChild(hint);
 
     // Indicativos monitorizados
-    const calls = crearGrupo('Indicativos', filtros.indicativos.length ? [['Quitar todos', () => { filtros.indicativos = []; aplicarFiltros(); }]] : null);
+    const calls = crearGrupo('Indicativos', filtros.indicativos.length ? String(filtros.indicativos.length) : '',
+        filtros.indicativos.length ? [['Quitar todos', () => { filtros.indicativos = []; aplicarFiltros(); }]] : null);
     const form = document.createElement('form');
     form.className = 'call-input';
-    form.innerHTML = '<input type="text" id="input-indicativo" placeholder="Ej. EA1NK, VP8…" autocomplete="off"><button type="submit" class="banda-label">Añadir</button>';
+    form.innerHTML = `<span class="call-field">
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.8"/><path d="m13.5 13.5 3.5 3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            <input type="text" id="input-indicativo" placeholder="EA1NK, VP8…" autocomplete="off" aria-label="Añadir indicativos">
+        </span><button type="submit" class="call-add">Añadir</button>`;
     form.onsubmit = (e) => {
         e.preventDefault();
         const input = form.querySelector('input');
@@ -344,9 +357,9 @@ function renderPanelFiltros() {
     };
     calls.body.appendChild(form);
     if (filtros.indicativos.length === 0) {
-        const vacio = document.createElement('span');
+        const vacio = document.createElement('p');
         vacio.className = 'fhint';
-        vacio.textContent = 'Ninguno: se muestran todos los indicativos.';
+        vacio.textContent = 'Sin indicativos: se muestran todos.';
         calls.body.appendChild(vacio);
     }
     filtros.indicativos.forEach(call => {

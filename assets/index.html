@@ -180,30 +180,60 @@
         .spots-table .snr { color: var(--accent); font-weight: 700; }
 
         /* --- Filtros --- */
-        .filters { background: var(--card); border-radius: 8px; margin-bottom: 12px; }
-        .filters-bar { display: flex; align-items: center; gap: 10px; padding: 8px 10px; flex-wrap: wrap; }
-        .filters-toggle { display: inline-flex; align-items: center; gap: 7px; background: #22252f; color: var(--accent); border: 1px solid #333747; border-radius: 6px; padding: 6px 12px; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
-        .filters-toggle:hover { border-color: var(--accent); }
-        .filters-toggle .chev { transition: transform 0.2s; color: var(--muted); }
+        .filters { background: var(--card); border: 1px solid #262938; border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+        .filters-bar { display: flex; align-items: center; gap: 12px; padding: 8px 10px; flex-wrap: wrap; }
+        .filters-toggle { display: inline-flex; align-items: center; gap: 8px; background: #1f2230; color: #e1e1e6; border: 1px solid #343849; border-radius: 8px; padding: 6px 10px 6px 12px; font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+        .filters-toggle svg { color: var(--accent); }
+        .filters-toggle:hover { border-color: #4a4f63; background: #242838; }
+        .filters-toggle[aria-expanded="true"] { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 8%, #1f2230); }
+        .filters-toggle .chev { width: 14px; height: 14px; color: var(--muted); transition: transform 0.2s; }
         .filters-toggle[aria-expanded="true"] .chev { transform: rotate(180deg); }
-        .filters-badge { background: var(--accent); color: #0f111a; border-radius: 10px; font-size: 0.7rem; padding: 0 7px; line-height: 1.5; }
-        .filters-summary { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; }
-        .fsum { background: #22252f; border: 1px solid #333747; color: #ccc; border-radius: 12px; padding: 2px 9px; font-size: 0.72rem; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-        .fsum b { color: #fff; font-weight: 600; }
-        .fsum.none { color: var(--muted); border-style: dashed; }
-        .filters-count { color: var(--muted); font-size: 0.75rem; white-space: nowrap; }
-        .link-btn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 0.75rem; padding: 2px 4px; }
-        .link-btn:hover { text-decoration: underline; }
-        .filters-panel { border-top: 1px solid var(--line); padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 14px 20px; }
-        .fgroup-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
-        .fgroup-head b { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; color: #aaa; }
-        .fgroup-body { display: flex; flex-wrap: wrap; gap: 5px; }
-        .filters-panel .mode-label, .filters-panel .banda-label { font-size: 0.75rem !important; padding: 3px 9px !important; min-width: 0 !important; margin: 0; }
-        .call-input { display: flex; gap: 6px; width: 100%; margin-bottom: 6px; }
-        .call-input input { flex: 1; min-width: 0; padding: 5px 8px; font-size: 0.8rem; text-transform: uppercase; }
-        .call-chip { display: inline-flex; align-items: center; gap: 4px; background: #1a1400; color: #ffae00; border: 1px solid #ffae00; border-radius: 12px; padding: 1px 4px 1px 9px; font-size: 0.75rem; font-weight: 700; }
-        .call-chip button { background: none; border: none; color: inherit; cursor: pointer; font-size: 0.85rem; line-height: 1; padding: 0 4px; }
-        .fhint { color: var(--muted); font-size: 0.72rem; }
+        .filters-badge { background: var(--accent); color: #0f111a; border-radius: 9px; font-size: 0.68rem; font-weight: 700; min-width: 18px; text-align: center; padding: 0 5px; line-height: 18px; }
+        .filters-divider { width: 1px; align-self: stretch; background: var(--line); margin: 2px 0; }
+        .filters-summary { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; align-items: center; }
+        .fsum { display: inline-flex; align-items: center; max-width: 100%; background: #1f2230; border: 1px solid #343849; border-radius: 999px; font-size: 0.72rem; overflow: hidden; }
+        .fsum-label { color: var(--muted); padding: 3px 0 3px 10px; text-transform: uppercase; letter-spacing: 0.5px; font-size: 0.64rem; }
+        .fsum-value { color: #fff; font-weight: 600; padding: 3px 4px 3px 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+        .fsum button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 3px 9px 3px 4px; }
+        .fsum button:hover { color: #fff; }
+        .fsum-empty { color: var(--muted); font-size: 0.78rem; }
+        .filters-meta { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+        .filters-count { color: var(--muted); font-size: 0.74rem; white-space: nowrap; }
+        .filters-count b { color: #ddd; font-weight: 600; }
+        .reset-btn { display: inline-flex; align-items: center; gap: 5px; background: none; border: 1px solid transparent; color: var(--muted); border-radius: 6px; padding: 4px 8px; font-size: 0.74rem; cursor: pointer; }
+        .reset-btn:hover { color: #fff; border-color: #343849; }
+        .link-btn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 0.72rem; padding: 0 2px; opacity: 0.85; }
+        .link-btn:hover { opacity: 1; text-decoration: underline; }
+
+        .filters-panel { border-top: 1px solid var(--line); background: #161821; padding: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 10px; }
+        .filters-panel:not([hidden]) { animation: filters-in 0.18s ease-out; }
+        @keyframes filters-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+        @media (prefers-reduced-motion: reduce) { .filters-panel:not([hidden]) { animation: none; } .filters-toggle .chev { transition: none; } }
+        .fgroup { background: var(--card); border: 1px solid #262938; border-radius: 8px; padding: 10px 12px; }
+        .fgroup-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .fgroup-head b { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 1px; color: #aab0c4; }
+        .fcount { font-size: 0.66rem; color: var(--muted); background: #22252f; border-radius: 8px; padding: 0 6px; line-height: 16px; }
+        .fspacer { flex: 1; }
+        .fgroup-body { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+        .fchip { --c: var(--accent); display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px; border: 1px solid #343849; background: transparent; color: #8a8fa3; font-size: 0.74rem; font-weight: 600; cursor: pointer; transition: background 0.15s, border-color 0.15s, color 0.15s; }
+        .fchip.mono { font-family: 'Cascadia Code', monospace; font-weight: 500; }
+        .fchip:hover { border-color: #4a4f63; color: #cfd3e0; }
+        .fchip[aria-pressed="true"] { background: color-mix(in srgb, var(--c) 14%, transparent); border-color: color-mix(in srgb, var(--c) 55%, transparent); color: #fff; }
+        .fchip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c); opacity: 0.3; }
+        .fchip[aria-pressed="true"] .dot { opacity: 1; }
+        .fchip:focus-visible, .filters-toggle:focus-visible, .call-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .fsep { width: 1px; height: 18px; background: #343849; margin: 0 4px; }
+        .fhint { color: var(--muted); font-size: 0.7rem; margin: 2px 0 0; width: 100%; }
+        .call-input { display: flex; gap: 6px; width: 100%; margin-bottom: 2px; }
+        .call-field { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; background: #12141c; border: 1px solid #343849; border-radius: 8px; padding: 0 9px; color: var(--muted); }
+        .call-field:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+        .call-field input { flex: 1; min-width: 0; background: none; border: none; padding: 6px 0; font-size: 0.8rem; text-transform: uppercase; color: #fff; }
+        .call-field input::placeholder { text-transform: none; color: #5d6274; }
+        .call-add { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); border-radius: 8px; padding: 0 12px; font-size: 0.76rem; font-weight: 600; cursor: pointer; }
+        .call-add:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+        .call-chip { display: inline-flex; align-items: center; gap: 2px; background: #ffae0018; color: #ffcf70; border: 1px solid #ffae0066; border-radius: 999px; padding: 2px 3px 2px 10px; font-size: 0.74rem; font-weight: 700; font-family: 'Cascadia Code', monospace; }
+        .call-chip button { background: none; border: none; color: inherit; opacity: 0.7; cursor: pointer; font-size: 0.85rem; line-height: 1; padding: 0 5px; }
+        .call-chip button:hover { opacity: 1; }
 
         /* --- Dashboard --- */
         .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 10px; }
@@ -302,7 +332,8 @@
         @media (max-width: 600px) {
             body { padding: 12px 16px; }
             .filters-summary { order: 5; flex-basis: 100%; }
-            .filters-count { margin-left: auto; }
+            .filters-divider, .reset-text { display: none; }
+            .filters-bar { gap: 8px; }
             .tile-value { font-size: 1.3rem; }
             .clock b { font-size: 1.1rem; }
         }
@@ -342,14 +373,20 @@
     <div class="filters">
         <div class="filters-bar">
             <button id="filtros-toggle" class="filters-toggle" aria-expanded="false" aria-controls="filtros-panel">
-                <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 5a1 1 0 0 1 1-1h12a1 1 0 0 1 .8 1.6l-4.2 5.6V16a1 1 0 0 1-1.447.894l-2-1A1 1 0 0 1 8 15v-3.8L3.2 6.6A1 1 0 0 1 3 5z" stroke="currentColor" stroke-width="1.6"/></svg>
+                <svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 5a1 1 0 0 1 1-1h12a1 1 0 0 1 .8 1.6l-4.2 5.6V16a1 1 0 0 1-1.447.894l-2-1A1 1 0 0 1 8 15v-3.8L3.2 6.6A1 1 0 0 1 3 5z" stroke="currentColor" stroke-width="1.6"/></svg>
                 <span>Filtros</span>
                 <span id="filtros-badge" class="filters-badge" hidden></span>
-                <span id="filtros-toggle-icon" class="chev" aria-hidden="true">▾</span>
+                <svg class="chev" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m5 8 5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
+            <span class="filters-divider" aria-hidden="true"></span>
             <div id="filtros-resumen" class="filters-summary"></div>
-            <span id="spots-count" class="filters-count"></span>
-            <button id="filtros-reset" class="link-btn" hidden>Restablecer</button>
+            <div class="filters-meta">
+                <span id="spots-count" class="filters-count"></span>
+                <button id="filtros-reset" class="reset-btn" aria-label="Restablecer filtros" title="Restablecer filtros" hidden>
+                    <svg width="13" height="13" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 10a6 6 0 1 0 1.8-4.3M4 4v3.5h3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    <span class="reset-text">Restablecer</span>
+                </button>
+            </div>
         </div>
         <div id="filtros-panel" class="filters-panel" hidden></div>
     </div>
@@ -414,7 +451,7 @@
         <span id="sources-updated"></span>
     </footer>
 
-    <script src="monitor.js?v=20261008c"></script>
+    <script src="monitor.js?v=20261008d"></script>
     <script src="dashboard.js?v=20261008"></script>
 </body>
 </html>
