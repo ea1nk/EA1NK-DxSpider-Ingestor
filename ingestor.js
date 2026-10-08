@@ -19,6 +19,10 @@ const DB_NAME=process.env.DB_NAME||'spider_spots';
 const COLLECTION_NAME=process.env.COLLECTION_NAME||'spots';
 const DX_HOST=process.env.DX_HOST||'localhost';
 const DX_PORT=parseInt(process.env.DX_PORT, 10)||7300;
+const DX_HOST_BACKUP=process.env.DX_HOST_BACKUP||'';
+const DX_PORT_BACKUP=parseInt(process.env.DX_PORT_BACKUP, 10)||DX_PORT;
+const FAILOVER_ATTEMPTS=parseInt(process.env.FAILOVER_ATTEMPTS, 10)||3;
+const PRIMARY_CHECK_INTERVAL_MS=parseInt(process.env.PRIMARY_CHECK_INTERVAL_MS, 10)||300000;
 const CALLSIGN=process.env.CALLSIGN||'YOUR_CALLSIGN';
 const SECRET_KEY=process.env.SECRET_KEY||'YOUR_SUPERSECRET_KEY';
 const API_PASSWORD=process.env.API_PASSWORD||'radio_password';
@@ -29,6 +33,8 @@ const BUFFER_LIMIT=parseInt(process.env.BUFFER_LIMIT, 10)||15;
 const TTL_SECONDS=parseInt(process.env.TTL_SECONDS, 10)||604800;
 const RECONNECT_DELAY_MS=parseInt(process.env.RECONNECT_DELAY_MS, 10)||10000;
 const FLUSH_INTERVAL_MS=parseInt(process.env.FLUSH_INTERVAL_MS, 10)||5000;
+const CONNECT_TIMEOUT_MS=parseInt(process.env.CONNECT_TIMEOUT_MS, 10)||15000;
+const INACTIVITY_TIMEOUT_MS=parseInt(process.env.INACTIVITY_TIMEOUT_MS, 10)||300000;
 
 let spotsCollection;
 let mongoClient;
@@ -36,6 +42,15 @@ let buffer=[];
 const clients=new Set(); 
 let flushTimer;
 let dxConnected=false;
+// Nodo principal y, opcionalmente, de respaldo
+const dxNodes=[{ name: 'principal', host: DX_HOST, port: DX_PORT }];
+if (DX_HOST_BACKUP) dxNodes.push({ name: 'respaldo', host: DX_HOST_BACKUP, port: DX_PORT_BACKUP });
+let activeNode=0;
+let consecutiveFailures=0;
+let primaryCheckTimer=null;
+let dxSocket=null;
+let reconnectTimer=null;
+let shuttingDown=false;
 let lastSpotTimestamp=null;
 // Store seen spots: Key is the fingerprint, Value is the timestamp
 const seenSpots = new Map();
@@ -208,14 +223,9 @@ function parseSpot(data) {
         isRbn = false;
     }
 
-    // 5. Timestamp Handling
+    // 5. Timestamp Handling: always use insertion time
     const timestamp = new Date();
-    if (timeZ) {
-        // Use the time provided by the cluster in UTC
-        timestamp.setUTCHours(timeZ.substring(0, 2), timeZ.substring(2, 4), 0, 0);
-    } else {
-        // Fallback: If no time is present, the current system UTC time is used
-    }
+    const time_z = timeZ || (timestamp.getUTCHours().toString().padStart(2, '0') + timestamp.getUTCMinutes().toString().padStart(2, '0'));
 
     return {
         spotter,
@@ -226,7 +236,7 @@ function parseSpot(data) {
         comment, // Full original comment is stored here
         snr,
         rbn: isRbn,
-        time_z: timeZ || timestamp.getUTCHours().toString().padStart(2, '0') + timestamp.getUTCMinutes().toString().padStart(2, '0'),
+        time_z,
         timestamp,
         cty: { 
             spotter: lookupCallsignInfo(spotter), 
@@ -280,49 +290,153 @@ function scheduleBufferFlush() {
     flushTimer=setInterval(() => flushBuffer().catch(console.error), FLUSH_INTERVAL_MS);
 }
 
+function scheduleReconnect() {
+    if (reconnectTimer || shuttingDown) return; // Una sola reconexión pendiente
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectToDxCluster();
+    }, RECONNECT_DELAY_MS);
+}
+
+// Cierre ordenado: 'bye' para que el cluster libere la sesión, y destroy como respaldo
+function closeDxSocket(socket) {
+    if (!socket || socket.destroyed) return;
+    try {
+        if (socket.writable) socket.end('bye\n');
+    } catch (_) { /* ignorar */ }
+    setTimeout(() => socket.destroy(), 3000).unref();
+}
+
+async function handleDxLine(line) {
+    // Un prompt sin salto de línea puede quedar delante del spot
+    const start = line.indexOf('DX de');
+    if (start === -1) return;
+    const spot = parseSpot(line.slice(start));
+    if (!spot) return false;
+    if (isDuplicate(spot)) return true;
+
+    lastSpotTimestamp = spot.timestamp;
+    const msg = JSON.stringify(spot);
+
+    for (const c of clients) {
+        if (c.readyState === 1) c.send(msg);
+    }
+
+    buffer.push(spot);
+    if (buffer.length >= BUFFER_LIMIT) await flushBuffer();
+    return true;
+}
+
+// Cambia de nodo tras FAILOVER_ATTEMPTS fallos seguidos
+function registerFailure() {
+    consecutiveFailures++;
+    if (dxNodes.length < 2 || consecutiveFailures < FAILOVER_ATTEMPTS) return;
+    consecutiveFailures = 0;
+    activeNode = (activeNode + 1) % dxNodes.length;
+    const node = dxNodes[activeNode];
+    console.warn(`⚠️ Cambiando al nodo ${node.name} (${node.host}:${node.port})`);
+}
+
+// Comprueba si el principal acepta conexiones TCP (sin hacer login)
+function probeNode(node) {
+    return new Promise((resolve) => {
+        const probe = net.connect(node.port, node.host);
+        const done = (ok) => { probe.destroy(); resolve(ok); };
+        probe.setTimeout(CONNECT_TIMEOUT_MS, () => done(false));
+        probe.once('connect', () => done(true));
+        probe.once('error', () => done(false));
+    });
+}
+
+// Mientras se usa el respaldo, vuelve al principal en cuanto esté disponible
+function startPrimaryCheck() {
+    if (primaryCheckTimer || dxNodes.length < 2) return;
+    primaryCheckTimer = setInterval(async () => {
+        if (activeNode === 0 || shuttingDown) return;
+        if (!(await probeNode(dxNodes[0]))) return;
+        if (activeNode === 0 || shuttingDown) return;
+        console.log(`✅ Nodo principal disponible de nuevo, volviendo a ${DX_HOST}:${DX_PORT}`);
+        activeNode = 0;
+        consecutiveFailures = 0;
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+        connectToDxCluster();
+    }, PRIMARY_CHECK_INTERVAL_MS);
+    primaryCheckTimer.unref();
+}
+
 function connectToDxCluster() {
-    const telnet=new net.Socket();
-    telnet.on('error', (e) => { dxConnected=false; console.error(`Cluster error: ${e.message}`); });
-    telnet.connect(DX_PORT, DX_HOST, () => {
-        dxConnected=true;
-        console.log("📡 Connected to DXSpider");
+    if (shuttingDown) return;
+    // Nunca más de una conexión viva
+    if (dxSocket) {
+        const old = dxSocket;
+        dxSocket = null;
+        closeDxSocket(old);
+    }
+
+    const telnet = new net.Socket();
+    dxSocket = telnet;
+    let pending = '';
+    let loginLines = 0;
+    let connected = false;
+    let gotSpot = false;
+    const node = dxNodes[activeNode];
+
+    telnet.setKeepAlive(true, 60000); // Detecta conexiones muertas a nivel TCP
+    telnet.setTimeout(CONNECT_TIMEOUT_MS); // Timeout de conexión; luego, de inactividad
+
+    telnet.on('timeout', () => {
+        console.error(connected
+            ? `Sin datos del cluster en ${INACTIVITY_TIMEOUT_MS / 1000}s, reconectando...`
+            : `Timeout conectando a ${node.host}:${node.port}`);
+        closeDxSocket(telnet);
+    });
+
+    telnet.on('error', (e) => {
+        console.error(`Cluster error: ${e.message}`);
+    });
+
+    console.log(`Conectando al nodo ${node.name} ${node.host}:${node.port} como ${CALLSIGN}...`);
+    telnet.connect(node.port, node.host, () => {
+        connected = true;
+        dxConnected = true;
+        telnet.setTimeout(INACTIVITY_TIMEOUT_MS);
+        console.log(`📡 Conectado al DXSpider (${node.name})`);
         telnet.write(`${CALLSIGN}\n`);
-        setTimeout(() => telnet.write('set/skim\n'), 1000);
+        setTimeout(() => { if (telnet.writable) telnet.write('set/skim\n'); }, 1000);
     });
 
     telnet.on('data', async (data) => {
-    const lines = data.toString().split(/\r?\n/);
-    
-    for (let line of lines) {
-        if (line.includes('DX de')) {
-            const spot = parseSpot(line);
-            
-            if (spot) {
-                // --- DEDUPLICATION LOGIC ---
-                if (isDuplicate(spot)) {
-                    // Skip this spot as it was recently processed
-                    continue; 
-                }
-                // ---------------------------
+        // Las líneas pueden llegar partidas entre paquetes TCP
+        const lines = (pending + data.toString()).split(/\r?\n/);
+        pending = lines.pop();
+        if (pending.length > 4096) pending = '';
 
-                //console.log(`[${spot.rbn ? 'RBN' : 'TRAD'}]: ${spot.spotted} on ${spot.freq}`);
-
-                lastSpotTimestamp = spot.timestamp;
-                const msg = JSON.stringify(spot);
-                
-                // Broadcast to websocket clients
-                for (const c of clients) {
-                    if (c.readyState === 1) c.send(msg);
-                }
-
-                buffer.push(spot);
-                if (buffer.length >= BUFFER_LIMIT) await flushBuffer();
+        for (const line of lines) {
+            // Mostrar las primeras líneas tras conectar (login, rechazos, etc.)
+            if (loginLines < 15 && line.trim() && !line.includes('DX de')) {
+                loginLines++;
+                console.log(`[cluster] ${line.trim()}`);
+            }
+            try {
+                if (await handleDxLine(line)) gotSpot = true;
+            } catch (err) {
+                console.error('Error procesando línea:', err.message, '|', line);
             }
         }
-    }
-});
+    });
 
-    telnet.on('close', () => { dxConnected=false; setTimeout(connectToDxCluster, RECONNECT_DELAY_MS); });
+    telnet.on('close', () => {
+        if (dxSocket !== telnet) return; // Socket antiguo ya reemplazado
+        dxSocket = null;
+        dxConnected = false;
+        if (shuttingDown) return;
+        // Una sesión que llegó a recibir spots no cuenta como fallo
+        if (gotSpot) consecutiveFailures = 0;
+        else registerFailure();
+        console.warn(`Conexión cerrada, reconectando en ${RECONNECT_DELAY_MS / 1000}s...`);
+        scheduleReconnect();
+    });
 }
 
 // --- FASTIFY SETUP ---
@@ -370,7 +484,12 @@ fastify.register(async (instance) => {
     instance.get('/health', async (_req, reply) => {
         return {
             ok: true,
-            dxCluster: { connected: dxConnected, host: DX_HOST },
+            dxCluster: {
+                connected: dxConnected,
+                node: dxNodes[activeNode].name,
+                host: dxNodes[activeNode].host,
+                port: dxNodes[activeNode].port
+            },
             buffer: { length: buffer.length, lastSpot: lastSpotTimestamp },
             uptime: Math.round(process.uptime())
         };
@@ -398,6 +517,20 @@ async function start() {
     await fastify.listen({ port: SERVER_PORT, host: SERVER_HOST });
     console.log(`🚀 Server running on ${SERVER_HOST}:${SERVER_PORT}`);
     connectToDxCluster();
+    startPrimaryCheck();
 }
+
+// Cierre limpio (docker stop/restart): avisar al cluster para no dejar sesiones colgadas
+async function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} recibido, cerrando...`);
+    clearTimeout(reconnectTimer);
+    closeDxSocket(dxSocket);
+    try { await flushBuffer(); } catch (_) { /* ignorar */ }
+    setTimeout(() => process.exit(0), 1000);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 start().catch(console.error);

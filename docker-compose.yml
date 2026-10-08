@@ -1,15 +1,19 @@
 version: "3.9"
-
 services:
   db:
-    #image: mongo:7
-    image: mongo:4.4.18 # Raspberry Pi 4 does not support MongoDB 7, so we use an older version
+    image: mongo:4.4.18
     container_name: ingestor-mongo
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"   # El archivo de log no pasará de 10 Megabytes
+        max-file: "3"     # Guardará máximo 3 archivos (30MB total) antes de rotar
     ports:
       - "27017:27017"
     volumes:
       - /mnt/wdred/ingester_data:/data/db
+
   ingestor:
     build:
       context: .
@@ -18,6 +22,11 @@ services:
     restart: unless-stopped
     depends_on:
       - db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     ports:
