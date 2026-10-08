@@ -30,3 +30,20 @@ coverage/
 
 # Local persistent data
 mongo_data/
+
+# Secrets and credentials
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.secret
+secrets/
+credentials*.json
+docker-compose.override.yml
+
+# Backup/merge leftovers
+*.orig
+*.rej
+*.bak
+*~
