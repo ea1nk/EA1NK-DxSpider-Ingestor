@@ -43,8 +43,12 @@ const clients=new Set();
 let flushTimer;
 let dxConnected=false;
 // Nodo principal y, opcionalmente, de respaldo
+// DX_HOST_BACKUP admite varios nodos separados por comas: "host1,host2:7300"
 const dxNodes=[{ name: 'principal', host: DX_HOST, port: DX_PORT }];
-if (DX_HOST_BACKUP) dxNodes.push({ name: 'respaldo', host: DX_HOST_BACKUP, port: DX_PORT_BACKUP });
+DX_HOST_BACKUP.split(',').map(h => h.trim()).filter(Boolean).forEach((entry, i) => {
+    const [host, port]=entry.split(':');
+    dxNodes.push({ name: `respaldo ${i + 1}`, host, port: parseInt(port, 10)||DX_PORT_BACKUP });
+});
 let activeNode=0;
 let consecutiveFailures=0;
 let primaryCheckTimer=null;
