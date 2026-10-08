@@ -179,6 +179,13 @@
         .spots-table .info { color: #ccc; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
         .spots-table .snr { color: var(--accent); font-weight: 700; }
 
+        /* --- Selector de idioma --- */
+        .lang-switch { display: inline-flex; background: #1f2230; border: 1px solid #343849; border-radius: 8px; padding: 2px; }
+        .lang-switch button { background: none; border: none; color: var(--muted); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.5px; padding: 4px 9px; border-radius: 6px; cursor: pointer; }
+        .lang-switch button:hover { color: #fff; }
+        .lang-switch button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+        .lang-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
         /* --- Filtros --- */
         .filters { background: var(--card); border: 1px solid #262938; border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
         .filters-bar { display: flex; align-items: center; gap: 12px; padding: 8px 10px; flex-wrap: wrap; }
@@ -346,26 +353,30 @@
         <div class="header-right">
             <div class="clocks">
                 <div class="clock"><b id="clock-utc">--:--:--</b><small>UTC · <span id="clock-date"></span></small></div>
-                <div class="clock"><b id="clock-local">--:--</b><small>Local</small></div>
+                <div class="clock"><b id="clock-local">--:--</b><small data-i18n="local">Local</small></div>
+            </div>
+            <div id="lang-switch" class="lang-switch" role="group" aria-label="Idioma">
+                <button type="button" data-lang="es" aria-pressed="true">ES</button>
+                <button type="button" data-lang="en" aria-pressed="false">EN</button>
             </div>
             <div id="cluster-status" class="pill offline">Cluster…</div>
             <div id="status" class="offline">DISCONNECTED</div>
         </div>
     </div>
 
-    <div id="sw-error" class="warn-banner" hidden>No se pudieron cargar los datos de propagación. Se reintentará automáticamente.</div>
+    <div id="sw-error" class="warn-banner" data-i18n="sw.error" hidden>No se pudieron cargar los datos de propagación. Se reintentará automáticamente.</div>
 
     <div class="tiles">
         <div class="tile" id="tile-sfi"><span class="tile-label">SFI</span><span class="tile-value">—</span><span class="tile-sub"></span><div id="spark-sfi"></div></div>
         <div class="tile" id="tile-ssn"><span class="tile-label">SSN</span><span class="tile-value">—</span><span class="tile-sub"></span><div id="spark-ssn"></div></div>
-        <div class="tile" id="tile-a"><span class="tile-label">Índice A</span><span class="tile-value">—</span><span class="tile-sub"></span><span class="tile-status"></span></div>
-        <div class="tile" id="tile-k"><span class="tile-label">Índice K</span><span class="tile-value">—</span><span class="tile-sub"></span><span class="tile-status"></span></div>
-        <div class="tile" id="tile-xray"><span class="tile-label">Rayos X</span><span class="tile-value">—</span><span class="tile-sub"></span><span class="tile-status"></span></div>
-        <div class="tile" id="tile-wind"><span class="tile-label">Viento solar</span><span class="tile-value">—</span><span class="tile-sub"></span><span class="tile-status"></span></div>
-        <div class="tile" id="tile-bz"><span class="tile-label">Campo IMF</span><span class="tile-value">—</span><span class="tile-sub"></span><span class="tile-status"></span></div>
-        <div class="tile" id="tile-noise"><span class="tile-label">Ruido HF</span><span class="tile-value">—</span><span class="tile-sub"></span></div>
+        <div class="tile" id="tile-a"><span class="tile-label" data-i18n="tile.a">Índice A</span><span class="tile-value">—</span><span class="tile-sub"></span><span class="tile-status"></span></div>
+        <div class="tile" id="tile-k"><span class="tile-label" data-i18n="tile.k">Índice K</span><span class="tile-value">—</span><span class="tile-sub"></span><span class="tile-status"></span></div>
+        <div class="tile" id="tile-xray"><span class="tile-label" data-i18n="tile.xray">Rayos X</span><span class="tile-value">—</span><span class="tile-sub"></span><span class="tile-status"></span></div>
+        <div class="tile" id="tile-wind"><span class="tile-label" data-i18n="tile.wind">Viento solar</span><span class="tile-value">—</span><span class="tile-sub"></span><span class="tile-status"></span></div>
+        <div class="tile" id="tile-bz"><span class="tile-label" data-i18n="tile.bz">Campo IMF</span><span class="tile-value">—</span><span class="tile-sub"></span><span class="tile-status"></span></div>
+        <div class="tile" id="tile-noise"><span class="tile-label" data-i18n="tile.noise">Ruido HF</span><span class="tile-value">—</span><span class="tile-sub"></span></div>
     </div>
-    <div class="scales"><span class="scales-title">Escalas NOAA</span><span id="noaa-scales" class="scales" style="margin:0"></span></div>
+    <div class="scales"><span class="scales-title" data-i18n="scales.title">Escalas NOAA</span><span id="noaa-scales" class="scales" style="margin:0"></span></div>
 
     <div class="layout">
     <div class="main-col">
@@ -374,7 +385,7 @@
         <div class="filters-bar">
             <button id="filtros-toggle" class="filters-toggle" aria-expanded="false" aria-controls="filtros-panel">
                 <svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 5a1 1 0 0 1 1-1h12a1 1 0 0 1 .8 1.6l-4.2 5.6V16a1 1 0 0 1-1.447.894l-2-1A1 1 0 0 1 8 15v-3.8L3.2 6.6A1 1 0 0 1 3 5z" stroke="currentColor" stroke-width="1.6"/></svg>
-                <span>Filtros</span>
+                <span data-i18n="f.title">Filtros</span>
                 <span id="filtros-badge" class="filters-badge" hidden></span>
                 <svg class="chev" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m5 8 5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
@@ -382,9 +393,9 @@
             <div id="filtros-resumen" class="filters-summary"></div>
             <div class="filters-meta">
                 <span id="spots-count" class="filters-count"></span>
-                <button id="filtros-reset" class="reset-btn" aria-label="Restablecer filtros" title="Restablecer filtros" hidden>
+                <button id="filtros-reset" class="reset-btn" aria-label="Restablecer filtros" title="Restablecer filtros" data-i18n-aria="f.resetAria" data-i18n-title="f.resetAria" hidden>
                     <svg width="13" height="13" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 10a6 6 0 1 0 1.8-4.3M4 4v3.5h3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                    <span class="reset-text">Restablecer</span>
+                    <span class="reset-text" data-i18n="f.reset">Restablecer</span>
                 </button>
             </div>
         </div>
@@ -396,9 +407,9 @@
             <thead>
                 <tr>
                     <th>UTC</th>
-                    <th>Frecuencia</th>
-                    <th>DX / Entidad</th>
-                    <th>Modo</th>
+                    <th data-i18n="th.freq">Frecuencia</th>
+                    <th data-i18n="th.dx">DX / Entidad</th>
+                    <th data-i18n="th.mode">Modo</th>
                     <th>QSL</th>
                     <th>Spotter</th>
                     <th>Info / SNR</th>
@@ -411,47 +422,48 @@
 
     <aside class="side-col">
         <section class="card">
-            <h2>Condiciones HF <small>N0NBH</small></h2>
-            <div id="band-conditions"><p class="empty">Cargando…</p></div>
+            <h2><span data-i18n="card.hf">Condiciones HF</span> <small>N0NBH</small></h2>
+            <div id="band-conditions"><p class="empty" data-i18n="loading">Cargando…</p></div>
         </section>
         <section class="card">
-            <h2>Actividad por banda <small id="activity-total">última hora</small></h2>
-            <div id="band-activity"><p class="empty">Cargando…</p></div>
+            <h2><span data-i18n="card.activity">Actividad por banda</span> <small id="activity-total" data-i18n="lastHour">última hora</small></h2>
+            <div id="band-activity"><p class="empty" data-i18n="loading">Cargando…</p></div>
         </section>
         <section class="card">
-            <h2>Más activos <small>última hora</small></h2>
+            <h2><span data-i18n="card.top">Más activos</span> <small data-i18n="lastHour">última hora</small></h2>
             <div class="tops">
-                <div><h3>Entidades DXCC</h3><div id="top-countries"></div></div>
-                <div><h3>Indicativos</h3><div id="top-calls"></div></div>
+                <div><h3 data-i18n="top.dxcc">Entidades DXCC</h3><div id="top-countries"></div></div>
+                <div><h3 data-i18n="top.calls">Indicativos</h3><div id="top-calls"></div></div>
             </div>
         </section>
         <section class="card">
-            <h2>Índice Kp <small>3 días · previsión NOAA</small></h2>
+            <h2><span data-i18n="card.kp">Índice Kp</span> <small data-i18n="card.kpSub">3 días · previsión NOAA</small></h2>
             <div id="kp-chart"></div>
             <div id="kp-forecast"></div>
         </section>
         <section class="card">
-            <h2>Rayos X (GOES) <small>6 horas</small></h2>
+            <h2><span data-i18n="card.xray">Rayos X (GOES)</span> <small data-i18n="card.xraySub">6 horas</small></h2>
             <div id="xray-chart"></div>
         </section>
         <section class="card">
             <h2>VHF <small>N0NBH</small></h2>
-            <div id="vhf-conditions"><p class="empty">Cargando…</p></div>
+            <div id="vhf-conditions"><p class="empty" data-i18n="loading">Cargando…</p></div>
         </section>
         <section class="card sun">
-            <h2>El Sol ahora <small>NASA SDO</small></h2>
+            <h2><span data-i18n="card.sun">El Sol ahora</span> <small>NASA SDO</small></h2>
             <div id="sun-tabs" class="sun-tabs"></div>
-            <img id="sun-img" alt="Imagen actual del Sol" loading="lazy">
+            <img id="sun-img" alt="Imagen actual del Sol" data-i18n-alt="sun.alt" loading="lazy">
         </section>
     </aside>
     </div>
 
     <footer>
-        <span>Fuentes: <a href="https://www.hamqsl.com/solar.html" target="_blank" rel="noopener">N0NBH / HamQSL</a> · <a href="https://www.swpc.noaa.gov/" target="_blank" rel="noopener">NOAA SWPC</a> · <a href="https://sdo.gsfc.nasa.gov/" target="_blank" rel="noopener">NASA SDO</a></span>
+        <span><span data-i18n="footer.sources">Fuentes:</span> <a href="https://www.hamqsl.com/solar.html" target="_blank" rel="noopener">N0NBH / HamQSL</a> · <a href="https://www.swpc.noaa.gov/" target="_blank" rel="noopener">NOAA SWPC</a> · <a href="https://sdo.gsfc.nasa.gov/" target="_blank" rel="noopener">NASA SDO</a></span>
         <span id="sources-updated"></span>
     </footer>
 
-    <script src="monitor.js?v=20261008d"></script>
-    <script src="dashboard.js?v=20261008"></script>
+    <script src="i18n.js?v=20261008"></script>
+    <script src="monitor.js?v=20261008e"></script>
+    <script src="dashboard.js?v=20261008b"></script>
 </body>
 </html>

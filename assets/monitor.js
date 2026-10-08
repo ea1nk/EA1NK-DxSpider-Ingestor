@@ -123,8 +123,8 @@ function renderSpots() {
     });
     const count = document.getElementById('spots-count');
     if (count) {
-        count.innerHTML = `<b>${filtrados.length}</b> de ${spotBuffer.length} spots`;
-        count.title = `Se muestran los ${MAX_SPOTS} más recientes que cumplen los filtros`;
+        count.innerHTML = t('f.count', { n: filtrados.length, total: spotBuffer.length });
+        count.title = t('f.countTitle', { max: MAX_SPOTS });
     }
 }
 
@@ -146,7 +146,7 @@ function crearSpotRow(spot) {
     row.innerHTML = `
         <td class="time-col">${escHtml(timeZ)}</td>
         <td><span class="freq">${spot.freq.toFixed(1)}</span><span class="band">${escHtml(spot.band)}</span></td>
-        <td><div class="dx">${flagImg}<span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign" title="Doble clic para abrir en QRZ" style="cursor:pointer;">${escHtml(spot.spotted)}</span><span class="country" title="${escHtml(country)}">${escHtml(country)}</span></div></td>
+        <td><div class="dx">${flagImg}<span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign" title="${escHtml(t('qrz.title'))}" style="cursor:pointer;">${escHtml(spot.spotted)}</span><span class="country" title="${escHtml(country)}">${escHtml(country)}</span></div></td>
         <td><span class="mode-label mode-${escHtml(spot.mode)}">${escHtml(spot.mode)}</span></td>
         <td><span class="qsl-label ${hasLotw ? 'selected' : 'desactivado'}">LoTW</span><span class="qsl-label ${hasEqsl ? 'selected' : 'desactivado'}">eQSL</span></td>
         <td><span class="spotter">${escHtml(spot.spotter)}</span><span class="spotter-country">${escHtml(spot.cty?.spotter?.data?.Country || '')}</span></td>
@@ -251,7 +251,7 @@ function crearGrupo(titulo, contador, acciones) {
     group.className = 'fgroup';
     const head = document.createElement('div');
     head.className = 'fgroup-head';
-    head.innerHTML = `<b>${titulo}</b>${contador ? `<span class="fcount">${contador}</span>` : ''}<span class="fspacer"></span>`;
+    head.innerHTML = `<b>${escHtml(titulo)}</b>${contador ? `<span class="fcount">${contador}</span>` : ''}<span class="fspacer"></span>`;
     (acciones || []).forEach(([texto, fn]) => {
         const b = document.createElement('button');
         b.type = 'button';
@@ -273,20 +273,20 @@ function renderResumenFiltros() {
     const reset = document.getElementById('filtros-reset');
     const lista = (items, max = 4) => items.length > max ? `${items.slice(0, max).join(', ')} +${items.length - max}` : items.join(', ');
     const activos = [];
-    if (restringe(filtros.bandas, BANDAS.length)) activos.push(['Bandas', lista(BANDAS.filter(b => filtros.bandas.includes(b))), () => { filtros.bandas = [...BANDAS]; }]);
-    if (restringe(filtros.modos, MODOS.length)) activos.push(['Modos', lista(MODOS.filter(m => filtros.modos.includes(m))), () => { filtros.modos = [...MODOS]; }]);
-    if (filtros.tipos.length === 1) activos.push(['Origen', `solo ${filtros.tipos[0]}`, () => { filtros.tipos = [...TIPOS]; }]);
-    if (filtros.qsl.length) activos.push(['QSL', filtros.qsl.join(' o '), () => { filtros.qsl = []; }]);
-    if (filtros.indicativos.length) activos.push(['Indicativos', lista(filtros.indicativos, 3), () => { filtros.indicativos = []; }]);
+    if (restringe(filtros.bandas, BANDAS.length)) activos.push([t('f.bands'), lista(BANDAS.filter(b => filtros.bandas.includes(b))), () => { filtros.bandas = [...BANDAS]; }]);
+    if (restringe(filtros.modos, MODOS.length)) activos.push([t('f.modes'), lista(MODOS.filter(m => filtros.modos.includes(m))), () => { filtros.modos = [...MODOS]; }]);
+    if (filtros.tipos.length === 1) activos.push([t('f.origin'), t('f.only', { x: filtros.tipos[0] }), () => { filtros.tipos = [...TIPOS]; }]);
+    if (filtros.qsl.length) activos.push(['QSL', filtros.qsl.join(t('f.or')), () => { filtros.qsl = []; }]);
+    if (filtros.indicativos.length) activos.push([t('f.calls'), lista(filtros.indicativos, 3), () => { filtros.indicativos = []; }]);
 
     resumen.innerHTML = '';
     if (!activos.length) {
-        resumen.innerHTML = '<span class="fsum-empty">Mostrando todos los spots</span>';
+        resumen.innerHTML = `<span class="fsum-empty">${escHtml(t('f.showingAll'))}</span>`;
     }
     activos.forEach(([label, valor, limpiar]) => {
         const chip = document.createElement('span');
         chip.className = 'fsum';
-        chip.innerHTML = `<span class="fsum-label">${escHtml(label)}</span><span class="fsum-value" title="${escHtml(valor)}">${escHtml(valor)}</span><button type="button" aria-label="Quitar filtro de ${escHtml(label)}">×</button>`;
+        chip.innerHTML = `<span class="fsum-label">${escHtml(label)}</span><span class="fsum-value" title="${escHtml(valor)}">${escHtml(valor)}</span><button type="button" aria-label="${escHtml(t('f.removeFilter', { x: label }))}">×</button>`;
         chip.querySelector('button').onclick = () => { limpiar(); aplicarFiltros(); };
         resumen.appendChild(chip);
     });
@@ -302,21 +302,21 @@ function renderPanelFiltros() {
     const n = (lista, total) => `${lista.length && lista.length <= total ? lista.length : total}/${total}`;
 
     // Bandas
-    const bandas = crearGrupo('Bandas', n(filtros.bandas, BANDAS.length), [['Todas', () => { filtros.bandas = [...BANDAS]; aplicarFiltros(); }]]);
+    const bandas = crearGrupo(t('f.bands'), n(filtros.bandas, BANDAS.length), [[t('f.allF'), () => { filtros.bandas = [...BANDAS]; aplicarFiltros(); }]]);
     BANDAS.forEach(banda => bandas.body.appendChild(crearChip(banda, filtros.bandas.includes(banda), () => {
         filtros.bandas = toggleEn(filtros.bandas, banda);
         aplicarFiltros();
     }, { mono: true })));
 
     // Modos
-    const modos = crearGrupo('Modos', n(filtros.modos, MODOS.length), [['Todos', () => { filtros.modos = [...MODOS]; aplicarFiltros(); }]]);
+    const modos = crearGrupo(t('f.modes'), n(filtros.modos, MODOS.length), [[t('f.allM'), () => { filtros.modos = [...MODOS]; aplicarFiltros(); }]]);
     MODOS.forEach(modo => modos.body.appendChild(crearChip(modo, filtros.modos.includes(modo), () => {
         filtros.modos = toggleEn(filtros.modos, modo);
         aplicarFiltros();
     }, { dot: true })));
 
     // Origen y QSL
-    const origen = crearGrupo('Origen y QSL');
+    const origen = crearGrupo(t('f.originQsl'));
     TIPOS.forEach(tipo => origen.body.appendChild(crearChip(tipo, filtros.tipos.includes(tipo), () => {
         filtros.tipos = toggleEn(filtros.tipos, tipo);
         aplicarFiltros();
@@ -330,18 +330,18 @@ function renderPanelFiltros() {
     })));
     const hint = document.createElement('p');
     hint.className = 'fhint';
-    hint.textContent = 'QSL: solo estaciones que usan LoTW / eQSL.';
+    hint.textContent = t('f.qslHint');
     origen.body.appendChild(hint);
 
     // Indicativos monitorizados
-    const calls = crearGrupo('Indicativos', filtros.indicativos.length ? String(filtros.indicativos.length) : '',
-        filtros.indicativos.length ? [['Quitar todos', () => { filtros.indicativos = []; aplicarFiltros(); }]] : null);
+    const calls = crearGrupo(t('f.calls'), filtros.indicativos.length ? String(filtros.indicativos.length) : '',
+        filtros.indicativos.length ? [[t('f.removeAll'), () => { filtros.indicativos = []; aplicarFiltros(); }]] : null);
     const form = document.createElement('form');
     form.className = 'call-input';
     form.innerHTML = `<span class="call-field">
             <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.8"/><path d="m13.5 13.5 3.5 3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-            <input type="text" id="input-indicativo" placeholder="EA1NK, VP8…" autocomplete="off" aria-label="Añadir indicativos">
-        </span><button type="submit" class="call-add">Añadir</button>`;
+            <input type="text" id="input-indicativo" placeholder="EA1NK, VP8…" autocomplete="off" aria-label="${escHtml(t('f.addCallsAria'))}">
+        </span><button type="submit" class="call-add">${escHtml(t('f.add'))}</button>`;
     form.onsubmit = (e) => {
         e.preventDefault();
         const input = form.querySelector('input');
@@ -359,13 +359,13 @@ function renderPanelFiltros() {
     if (filtros.indicativos.length === 0) {
         const vacio = document.createElement('p');
         vacio.className = 'fhint';
-        vacio.textContent = 'Sin indicativos: se muestran todos.';
+        vacio.textContent = t('f.noCalls');
         calls.body.appendChild(vacio);
     }
     filtros.indicativos.forEach(call => {
         const chip = document.createElement('span');
         chip.className = 'call-chip';
-        chip.innerHTML = `${escHtml(call)}<button type="button" aria-label="Quitar ${escHtml(call)}">×</button>`;
+        chip.innerHTML = `${escHtml(call)}<button type="button" aria-label="${escHtml(t('f.remove', { x: call }))}">×</button>`;
         chip.querySelector('button').onclick = () => {
             filtros.indicativos = filtros.indicativos.filter(c => c !== call);
             aplicarFiltros();

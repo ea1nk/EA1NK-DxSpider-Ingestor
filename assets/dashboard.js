@@ -19,7 +19,7 @@ function fmtUtc(iso, withDate = true) {
     const hh = String(d.getUTCHours()).padStart(2, '0');
     const mm = String(d.getUTCMinutes()).padStart(2, '0');
     if (!withDate) return `${hh}:${mm}`;
-    const day = d.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', timeZone: 'UTC' });
+    const day = d.toLocaleDateString(LOCALE, { day: '2-digit', month: 'short', timeZone: 'UTC' });
     return `${day} ${hh}:${mm} UTC`;
 }
 
@@ -34,43 +34,43 @@ async function getJson(url) {
 const statusChip = (level, text) => `<span class="chip st-${level}"><i></i>${esc(text)}</span>`;
 
 function kpStatus(kp) {
-    if (kp === null || kp === undefined) return ['muted', 'Sin datos'];
-    if (kp < 3) return ['good', 'Quieto'];
-    if (kp < 4) return ['warning', 'Inestable'];
-    if (kp < 5) return ['serious', 'Activo'];
-    return ['critical', `Tormenta G${Math.min(5, Math.floor(kp) - 4)}`];
+    if (kp === null || kp === undefined) return ['muted', t('noData')];
+    if (kp < 3) return ['good', t('st.quiet')];
+    if (kp < 4) return ['warning', t('st.unsettled')];
+    if (kp < 5) return ['serious', t('st.active')];
+    return ['critical', t('st.stormG', { g: Math.min(5, Math.floor(kp) - 4) })];
 }
 
 function aStatus(a) {
-    if (a === null || a === undefined) return ['muted', 'Sin datos'];
-    if (a < 8) return ['good', 'Quieto'];
-    if (a < 16) return ['warning', 'Inestable'];
-    if (a < 30) return ['serious', 'Activo'];
-    return ['critical', 'Tormenta'];
+    if (a === null || a === undefined) return ['muted', t('noData')];
+    if (a < 8) return ['good', t('st.quiet')];
+    if (a < 16) return ['warning', t('st.unsettled')];
+    if (a < 30) return ['serious', t('st.active')];
+    return ['critical', t('st.storm')];
 }
 
 function xrayStatus(cls) {
-    if (!cls) return ['muted', 'Sin datos'];
+    if (!cls) return ['muted', t('noData')];
     const letter = cls[0];
     const value = parseFloat(cls.slice(1));
-    if (letter === 'X') return ['critical', 'Fulguración X (R3+)'];
-    if (letter === 'M' && value >= 5) return ['serious', 'Fulguración M (R2)'];
-    if (letter === 'M') return ['warning', 'Fulguración M (R1)'];
-    return ['good', 'Normal'];
+    if (letter === 'X') return ['critical', t('st.flareX')];
+    if (letter === 'M' && value >= 5) return ['serious', t('st.flareM2')];
+    if (letter === 'M') return ['warning', t('st.flareM1')];
+    return ['good', t('st.normal')];
 }
 
 function windStatus(speed) {
-    if (speed === null || speed === undefined) return ['muted', 'Sin datos'];
-    if (speed < 500) return ['good', 'Normal'];
-    if (speed < 700) return ['warning', 'Elevado'];
-    return ['serious', 'Muy alto'];
+    if (speed === null || speed === undefined) return ['muted', t('noData')];
+    if (speed < 500) return ['good', t('st.normal')];
+    if (speed < 700) return ['warning', t('st.elevated')];
+    return ['serious', t('st.veryHigh')];
 }
 
 function bzStatus(bz) {
-    if (bz === null || bz === undefined) return ['muted', 'Sin datos'];
-    if (bz > -5) return ['good', bz >= 0 ? 'Norte' : 'Sur débil'];
-    if (bz > -10) return ['warning', 'Sur'];
-    return ['serious', 'Sur intenso'];
+    if (bz === null || bz === undefined) return ['muted', t('noData')];
+    if (bz > -5) return ['good', bz >= 0 ? t('st.north') : t('st.southWeak')];
+    if (bz > -10) return ['warning', t('st.south')];
+    return ['serious', t('st.southStrong')];
 }
 
 function scaleLevel(v) {
@@ -81,7 +81,7 @@ function scaleLevel(v) {
     return 'critical';
 }
 
-const COND_ES = { Good: ['good', 'Buena'], Fair: ['warning', 'Regular'], Poor: ['critical', 'Mala'] };
+const COND_LEVEL = { Good: 'good', Fair: 'warning', Poor: 'critical' };
 
 // --- Tooltip compartido ---
 const tip = document.createElement('div');
@@ -137,7 +137,7 @@ function sparkline(el, values, labelFn) {
 function renderKpChart(kp) {
     const el = $('kp-chart');
     if (!el) return;
-    if (!kp || !kp.length) { el.innerHTML = '<p class="empty">Sin datos de Kp</p>'; return; }
+    if (!kp || !kp.length) { el.innerHTML = `<p class="empty">${esc(t('kp.none'))}</p>`; return; }
     const W = 320, H = 150, L = 22, R = 6, T = 8, B = 22;
     const pw = W - L - R, ph = H - T - B;
     const slot = pw / kp.length;
@@ -159,10 +159,10 @@ function renderKpChart(kp) {
         const d = new Date(p.time);
         if (d.getUTCHours() === 0) {
             const xd = L + i * slot;
-            days += `<line x1="${xd}" x2="${xd}" y1="${T + ph}" y2="${T + ph + 4}" class="grid"/><text x="${xd + 2}" y="${H - 6}" class="axis">${d.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', timeZone: 'UTC' })}</text>`;
+            days += `<line x1="${xd}" x2="${xd}" y1="${T + ph}" y2="${T + ph + 4}" class="grid"/><text x="${xd + 2}" y="${H - 6}" class="axis">${d.toLocaleDateString(LOCALE, { day: '2-digit', month: 'short', timeZone: 'UTC' })}</text>`;
         }
     });
-    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Índice Kp planetario, últimos 3 días">${grid}${days}${bars}${hits}</svg>`;
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="${esc(t('kp.aria'))}">${grid}${days}${bars}${hits}</svg>`;
     el.querySelectorAll('.hit').forEach(rect => {
         rect.onmousemove = (evt) => {
             const p = kp[rect.dataset.i];
@@ -178,7 +178,7 @@ function renderXrayChart(xray) {
     const el = $('xray-chart');
     if (!el) return;
     const series = xray?.series || [];
-    if (series.length < 2) { el.innerHTML = '<p class="empty">Sin datos de rayos X</p>'; return; }
+    if (series.length < 2) { el.innerHTML = `<p class="empty">${esc(t('xray.none'))}</p>`; return; }
     const W = 320, H = 150, L = 22, R = 10, T = 8, B = 22;
     const pw = W - L - R, ph = H - T - B;
     const LOG_MIN = -8.5, LOG_MAX = -3.5;
@@ -202,7 +202,7 @@ function renderXrayChart(xray) {
     const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
     const area = `${line}L${pts.at(-1)[0].toFixed(1)},${T + ph}L${pts[0][0].toFixed(1)},${T + ph}Z`;
     const lastPt = pts.at(-1);
-    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Flujo de rayos X GOES, últimas 6 horas">
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="${esc(t('xray.aria'))}">
         ${grid}${ticks}
         <path d="${area}" class="series-area"/>
         <path d="${line}" class="series-line"/>
@@ -224,7 +224,7 @@ function renderXrayChart(xray) {
         cross.setAttribute('x1', px); cross.setAttribute('x2', px); cross.hidden = false;
         dot.setAttribute('cx', px); dot.setAttribute('cy', py); dot.hidden = false;
         const cls = xrayClassOf(series[best].flux);
-        showTip(evt, `<b>${fmtUtc(series[best].time)}</b><br>Clase ${cls} · ${series[best].flux.toExponential(2)} W/m²`);
+        showTip(evt, `<b>${fmtUtc(series[best].time)}</b><br>${t('xray.class', { cls })} · ${series[best].flux.toExponential(2)} W/m²`);
     };
     hit.onmouseleave = () => { cross.hidden = true; dot.hidden = true; hideTip(); };
 }
@@ -251,32 +251,32 @@ function renderSpaceWeather(sw) {
     const daily = sw.daily || [];
     const kpNow = sw.kp?.length ? sw.kp.at(-1).kp : h.kIndex;
 
-    setTile('tile-sfi', fmt(h.sfi ?? daily.at(-1)?.sfi), 'Flujo solar 10,7 cm · 30 días');
+    setTile('tile-sfi', fmt(h.sfi ?? daily.at(-1)?.sfi), t('tile.sfiSub'));
     sparkline($('spark-sfi'), daily.map(d => ({ value: d.sfi, date: d.date })), p => `<b>${esc(p.date)}</b><br>SFI ${p.value}`);
 
-    setTile('tile-ssn', fmt(h.ssn ?? daily.at(-1)?.ssn), 'Manchas solares · 30 días');
+    setTile('tile-ssn', fmt(h.ssn ?? daily.at(-1)?.ssn), t('tile.ssnSub'));
     sparkline($('spark-ssn'), daily.map(d => ({ value: d.ssn, date: d.date })), p => `<b>${esc(p.date)}</b><br>SSN ${p.value}`);
 
-    setTile('tile-a', fmt(h.aIndex), 'Índice A', aStatus(h.aIndex));
-    setTile('tile-k', fmt(kpNow, kpNow % 1 ? 2 : 0), 'Índice Kp (NOAA)', kpStatus(kpNow));
+    setTile('tile-a', fmt(h.aIndex), t('tile.aSub'), aStatus(h.aIndex));
+    setTile('tile-k', fmt(kpNow, kpNow % 1 ? 2 : 0), t('tile.kSub'), kpStatus(kpNow));
 
     const xcls = sw.xray?.currentClass || h.xray;
-    setTile('tile-xray', xcls || '—', sw.xray?.max6hClass ? `Máx. 6 h: ${esc(sw.xray.max6hClass)}` : 'Rayos X (GOES)', xrayStatus(xcls));
+    setTile('tile-xray', xcls || '—', sw.xray?.max6hClass ? esc(t('tile.xrayMax', { cls: sw.xray.max6hClass })) : t('tile.xraySub'), xrayStatus(xcls));
 
     const speed = sw.windSpeed?.speed ?? h.solarWind;
-    setTile('tile-wind', speed ? `${fmt(speed)}` : '—', 'Viento solar · km/s', windStatus(speed));
+    setTile('tile-wind', speed ? `${fmt(speed)}` : '—', t('tile.windSub'), windStatus(speed));
 
     const bz = sw.windMag?.bz ?? h.magField;
     setTile('tile-bz', bz !== null && bz !== undefined ? fmt(bz, 1) : '—', `Bz · nT${sw.windMag?.bt != null ? ` · Bt ${fmt(sw.windMag.bt)}` : ''}`, bzStatus(bz));
 
-    setTile('tile-noise', h.signalNoise || '—', `Ruido · Geomag.: ${esc(h.geomagField || '—')}`);
+    setTile('tile-noise', h.signalNoise || '—', esc(t('tile.noiseSub', { geo: h.geomagField || '—' })));
 
     // Escalas NOAA
     const sc = sw.scales || {};
     $('noaa-scales').innerHTML = ['r', 's', 'g'].map(k => {
         const v = sc[k];
-        const names = { r: 'Radio blackout', s: 'Tormenta de radiación', g: 'Tormenta geomagnética' };
-        return `<span class="scale st-${scaleLevel(v)}" title="${names[k]}${sc[k + 'Text'] ? ': ' + esc(sc[k + 'Text']) : ''}"><b>${k.toUpperCase()}${v ?? '–'}</b>${esc(names[k])}</span>`;
+        const names = { r: t('scale.r'), s: t('scale.s'), g: t('scale.g') };
+        return `<span class="scale st-${scaleLevel(v)}" title="${esc(names[k])}${sc[k + 'Text'] ? ': ' + esc(sc[k + 'Text']) : ''}"><b>${k.toUpperCase()}${v ?? '–'}</b>${esc(names[k])}</span>`;
     }).join('');
 
     renderBandConditions(h);
@@ -293,45 +293,45 @@ function renderBandConditions(h) {
     const el = $('band-conditions');
     const bands = h.bands || {};
     const names = Object.keys(bands);
-    if (!names.length) { el.innerHTML = '<p class="empty">Sin datos</p>'; return; }
+    if (!names.length) { el.innerHTML = `<p class="empty">${esc(t('noData'))}</p>`; return; }
     const hour = new Date().getHours();
     const now = hour >= 7 && hour < 20 ? 'day' : 'night';
     const cell = (c, isNow) => {
-        const [lvl, txt] = COND_ES[c] || ['muted', c || '—'];
+        const [lvl, txt] = COND_LEVEL[c] ? [COND_LEVEL[c], t(`cond.${c}`)] : ['muted', c || '—'];
         return `<td class="${isNow ? 'now' : ''}">${statusChip(lvl, txt)}</td>`;
     };
     el.innerHTML = `<table class="cond">
-        <thead><tr><th>Bandas</th><th class="${now === 'day' ? 'now' : ''}">Día${now === 'day' ? ' · ahora' : ''}</th><th class="${now === 'night' ? 'now' : ''}">Noche${now === 'night' ? ' · ahora' : ''}</th></tr></thead>
+        <thead><tr><th>${t('hf.bands')}</th><th class="${now === 'day' ? 'now' : ''}">${t('hf.day')}${now === 'day' ? ` · ${t('hf.now')}` : ''}</th><th class="${now === 'night' ? 'now' : ''}">${t('hf.night')}${now === 'night' ? ` · ${t('hf.now')}` : ''}</th></tr></thead>
         <tbody>${names.map(n => `<tr><td class="band-name">${esc(n)}</td>${cell(bands[n].day, now === 'day')}${cell(bands[n].night, now === 'night')}</tr>`).join('')}</tbody>
     </table>
-    <div class="cond-extra">MUF: <b>${esc(h.muf || '—')}</b> · Aurora: <b>${fmt(h.aurora)}</b>${h.auroraLat ? ` (lat. ${fmt(h.auroraLat, 1)}°)` : ''} · Protones: <b>${fmt(h.protonFlux)}</b></div>`;
+    <div class="cond-extra">MUF: <b>${esc(h.muf || '—')}</b> · Aurora: <b>${fmt(h.aurora)}</b>${h.auroraLat ? ` (lat. ${fmt(h.auroraLat, 1)}°)` : ''} · ${t('hf.protons')}: <b>${fmt(h.protonFlux)}</b></div>`;
 }
 
 function renderVhf(h) {
     const el = $('vhf-conditions');
     const NAMES = {
-        'vhf-aurora|northern_hemi': 'Aurora VHF (hem. norte)',
-        'E-Skip|europe': 'Es Europa 2 m',
-        'E-Skip|europe_6m': 'Es Europa 6 m',
-        'E-Skip|europe_4m': 'Es Europa 4 m',
-        'E-Skip|north_america': 'Es Norteamérica 2 m'
+        'vhf-aurora|northern_hemi': t('vhf.aurora'),
+        'E-Skip|europe': t('vhf.eu2'),
+        'E-Skip|europe_6m': t('vhf.eu6'),
+        'E-Skip|europe_4m': t('vhf.eu4'),
+        'E-Skip|north_america': t('vhf.na2')
     };
     const rows = (h.vhf || []).map(p => {
         const open = !/closed/i.test(p.status);
         const label = NAMES[`${p.name}|${p.location}`] || `${p.name} ${p.location}`;
-        return `<li><span>${esc(label)}</span>${open ? statusChip('good', p.status) : statusChip('muted', 'Cerrada')}</li>`;
+        return `<li><span>${esc(label)}</span>${open ? statusChip('good', p.status) : statusChip('muted', t('vhf.closed'))}</li>`;
     });
-    el.innerHTML = rows.length ? `<ul class="vhf">${rows.join('')}</ul>` : '<p class="empty">Sin datos</p>';
+    el.innerHTML = rows.length ? `<ul class="vhf">${rows.join('')}</ul>` : `<p class="empty">${esc(t('noData'))}</p>`;
 }
 
 function renderForecast(forecast) {
     const el = $('kp-forecast');
     if (!forecast.length) { el.innerHTML = ''; return; }
     el.innerHTML = `<div class="forecast">${forecast.map(f => {
-        const d = new Date(`${f.date}T00:00:00Z`).toLocaleDateString('es-ES', { weekday: 'short', day: '2-digit', timeZone: 'UTC' });
+        const d = new Date(`${f.date}T00:00:00Z`).toLocaleDateString(LOCALE, { weekday: 'short', day: '2-digit', timeZone: 'UTC' });
         return `<div class="fc"><span class="fc-day">${esc(d)}</span>
             <span class="scale st-${scaleLevel(f.g)}"><b>G${f.g ?? '–'}</b></span>
-            <span class="fc-prob" title="Probabilidad de blackout de radio R1-R2 / R3+">R ${fmt(f.rMinorProb)}% / ${fmt(f.rMajorProb)}%</span></div>`;
+            <span class="fc-prob" title="${esc(t('forecast.rProb'))}">R ${fmt(f.rMinorProb)}% / ${fmt(f.rMajorProb)}%</span></div>`;
     }).join('')}</div>`;
 }
 
@@ -341,16 +341,16 @@ function renderActivity(act) {
     const counts = new Map(act.bands.map(b => [b.name, b.count]));
     const bands = BAND_ORDER.filter(b => counts.has(b)).concat(act.bands.map(b => b.name).filter(b => !BAND_ORDER.includes(b)));
     const max = Math.max(1, ...act.bands.map(b => b.count));
-    $('activity-total').textContent = `${act.total} spots`;
+    $('activity-total').textContent = t('act.spots', { n: act.total });
     el.innerHTML = bands.length ? bands.map(b => {
         const c = counts.get(b);
         const pct = act.total ? Math.round(c / act.total * 100) : 0;
-        const label = b === 'OTRO' ? 'Otras' : b;
-        return `<div class="hbar" data-tip="<b>${esc(label)}</b><br>${c} spots · ${pct}% del total">
+        const label = b === 'OTRO' ? t('act.other') : b;
+        return `<div class="hbar" data-tip="<b>${esc(label)}</b><br>${esc(t('act.tip', { n: c, pct }))}">
             <span class="hbar-label">${esc(label)}</span>
             <span class="hbar-track"><span class="hbar-fill" style="width:${(c / max * 100).toFixed(1)}%"></span></span>
             <span class="hbar-value">${c}</span></div>`;
-    }).join('') : '<p class="empty">Sin spots en la última hora</p>';
+    }).join('') : `<p class="empty">${esc(t('act.none'))}</p>`;
     el.querySelectorAll('.hbar').forEach(row => {
         row.onmousemove = (evt) => showTip(evt, row.dataset.tip);
         row.onmouseleave = hideTip;
@@ -364,27 +364,35 @@ function renderActivity(act) {
 }
 
 // --- Estado del cluster ---
+// El servidor nombra los nodos en castellano ("principal", "respaldo N")
+function nodeName(name) {
+    if (name === 'principal') return t('node.primary');
+    const m = /^respaldo (\d+)$/.exec(name || '');
+    return m ? t('node.backup', { n: m[1] }) : (name || '');
+}
+
 function renderHealth(h) {
     const el = $('cluster-status');
     const c = h.dxCluster || {};
     el.className = `pill ${c.connected ? 'online' : 'offline'}`;
-    el.textContent = c.connected ? `Cluster: ${c.node} · ${c.host}` : `Cluster desconectado (${c.node})`;
-    el.title = c.connected ? `${c.host}:${c.port}` : 'Reconectando…';
+    const node = nodeName(c.node);
+    el.textContent = c.connected ? t('cluster.connected', { node, host: c.host }) : t('cluster.down', { node });
+    el.title = c.connected ? `${c.host}:${c.port}` : t('cluster.reconnecting');
 }
 
 // --- Relojes ---
 function tickClocks() {
     const now = new Date();
     $('clock-utc').textContent = now.toISOString().slice(11, 19);
-    $('clock-local').textContent = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-    $('clock-date').textContent = now.toLocaleDateString('es-ES', { weekday: 'short', day: '2-digit', month: 'short', timeZone: 'UTC' });
+    $('clock-local').textContent = now.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
+    $('clock-date').textContent = now.toLocaleDateString(LOCALE, { weekday: 'short', day: '2-digit', month: 'short', timeZone: 'UTC' });
 }
 
 // --- Imagen del Sol (NASA SDO) ---
 const SUN_IMAGES = {
-    '0171': 'AIA 171 Å (corona)',
-    'HMIIC': 'HMI (manchas)',
-    '0304': 'AIA 304 Å (cromosfera)'
+    '0171': t('sun.0171'),
+    'HMIIC': t('sun.HMIIC'),
+    '0304': t('sun.0304')
 };
 let sunImage = '0171';
 try { sunImage = localStorage.getItem('dxmonitor-sun') || sunImage; } catch (_) { /* ignore */ }
@@ -394,7 +402,7 @@ function renderSun() {
     if (!SUN_IMAGES[sunImage]) sunImage = '0171';
     const slot = Math.floor(Date.now() / SUN_REFRESH_MS);
     img.src = `https://sdo.gsfc.nasa.gov/assets/img/latest/latest_512_${sunImage}.jpg?t=${slot}`;
-    img.alt = `Sol en ${SUN_IMAGES[sunImage]}`;
+    img.alt = t('sun.altView', { view: SUN_IMAGES[sunImage] });
     $('sun-tabs').innerHTML = Object.entries(SUN_IMAGES).map(([k, v]) =>
         `<button class="tab ${k === sunImage ? 'selected' : ''}" data-k="${k}">${esc(v)}</button>`).join('');
     $('sun-tabs').querySelectorAll('button').forEach(b => {
