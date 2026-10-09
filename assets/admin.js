@@ -256,7 +256,7 @@ function renderDatabase(m) {
         [t('db.disk'), `<b>${esc(fmtBytes(disk))}</b> · ${esc(t('db.diskDetail', { data: fmtBytes(m.storageSize), raw: fmtBytes(m.dataSize), idx: fmtBytes(m.indexSize), n: m.indexCount }))}`],
         [t('db.spots'), `<b>${fmtNum(m.spots)}</b>${m.oldest ? ` · ${esc(t('db.since', { date: fmtDate(new Date(m.oldest)), days: fmtDays(oldestDays) }))}` : ''}`],
         [t('db.rate'), `<b>${fmtNum(m.last24h)}</b> ${esc(t('db.rateDetail', { b: Math.round(m.bytesPerSpot || 0) }))}`],
-        [t('db.ttl'), ttlDays ? `<b>${fmtDays(ttlDays)} ${esc(t('db.days'))}</b> · ${esc(t('db.estimate', { size: fmtBytes(estimate(m, ttlDays)) }))}` : esc(t('db.noTtl'))]
+        [t('db.ttl'), ttlDays ? `<b>${fmtDays(ttlDays)} ${esc(t('db.days'))}</b> · ${esc(t('db.estimate', { size: fmtBytes(estimate(m, ttlDays)) }))} <span class="muted">(${esc(t(m.ttlSource === 'admin' ? 'db.srcAdmin' : 'db.srcEnv'))})</span>` : esc(t('db.noTtl'))]
     ];
     if (m.fsTotalSize) {
         // fsUsedSize de MongoDB incluye los bloques reservados del sistema de archivos (ext4 reserva un 5 % para root),
@@ -282,13 +282,59 @@ function renderDbSim() {
         <div class="db-line">${esc(t('db.simSpots', { n: fmtNum(Math.round((m.last24h || 0) * days)) }))}</div>
         ${ratio !== null ? `<div class="meter${ratio > 0.9 ? ' crit' : ratio > 0.7 ? ' warn' : ''}"><i style="width:${Math.min(100, ratio * 100).toFixed(1)}%"></i></div>
         <div class="db-line">${esc(t('db.simDisk', { pct: (ratio * 100).toLocaleString(LOCALE, { maximumFractionDigits: ratio < 0.01 ? 2 : 1 }) }))}</div>` : ''}
-        <div class="db-line">${esc(t('db.simHow', { days, ttl: Math.round(days * 86400) }))}</div>
-        ${ratio !== null && ratio > 0.9 ? `<div class="db-warn">${esc(t('db.simTooBig'))}</div>` : ''}`;
+        ${ratio !== null && ratio > 0.9 ? `<div class="db-warn">${esc(t('db.simTooBig'))}</div>` : ''}
+        <div class="db-apply" id="db-apply"></div>`;
+    renderTtlApply();
+}
+
+// --- Aplicar la retención desde el panel (con confirmación) ---
+let ttlConfirm = null; // { days, toDelete } mientras se pide confirmación
+
+function renderTtlApply() {
+    const el = $('db-apply');
+    const m = lastMongo;
+    if (!el || !m) return;
+    const days = Math.max(1, Math.min(3650, dbDays));
+    const currentDays = m.ttlSeconds ? m.ttlSeconds / 86400 : null;
+    if (currentDays && Math.abs(currentDays - days) < 1e-9) {
+        el.innerHTML = `<span class="db-line">${esc(t('db.isCurrent'))}</span>`;
+        return;
+    }
+    if (ttlConfirm && ttlConfirm.days === days) {
+        const shorter = currentDays && days < currentDays;
+        el.innerHTML = `<div class="${shorter ? 'db-warn' : 'db-line'}">${esc(shorter
+            ? t('db.confirmShorter', { days, n: fmtNum(ttlConfirm.toDelete) })
+            : t('db.confirmLonger', { days }))}</div>
+            <div class="actions"><button class="btn small ${shorter ? 'danger' : 'primary'}" id="ttl-yes">${esc(t('db.apply', { days }))}</button><button class="btn small" id="ttl-no">${esc(t('adm.cancel'))}</button></div>`;
+        $('ttl-no').onclick = () => { ttlConfirm = null; renderTtlApply(); };
+        $('ttl-yes').onclick = async () => {
+            try {
+                await api('PUT', '/api/admin/settings/ttl', { days });
+                toast(t('db.applied', { days }));
+                ttlConfirm = null;
+                loadStatus();
+            } catch (err) {
+                toast(t('adm.error', { msg: err.message }), true);
+            }
+        };
+        return;
+    }
+    el.innerHTML = `<button class="btn small primary" id="ttl-apply">${esc(t('db.apply', { days }))}</button>`;
+    $('ttl-apply').onclick = async () => {
+        try {
+            const r = await api('GET', `/api/admin/settings/ttl/preview?days=${days}`);
+            ttlConfirm = { days, toDelete: r.toDelete };
+            renderTtlApply();
+        } catch (err) {
+            toast(t('adm.error', { msg: err.message }), true);
+        }
+    };
 }
 
 $('db-days').value = dbDays;
 $('db-days').oninput = () => {
     dbDays = parseInt($('db-days').value, 10) || 30;
+    ttlConfirm = null;
     try { localStorage.setItem('dxadmin-db-days', dbDays); } catch (_) { /* ignore */ }
     renderDbSim();
 };

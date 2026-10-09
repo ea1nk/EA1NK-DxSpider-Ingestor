@@ -33,7 +33,10 @@ const DISABLE_TOKEN_AUTH=(process.env.DISABLE_TOKEN_AUTH||'false').toLowerCase()
 const SERVER_HOST=process.env.SERVER_HOST||'0.0.0.0';
 const SERVER_PORT=parseInt(process.env.SERVER_PORT, 10)||3000;
 const BUFFER_LIMIT=parseInt(process.env.BUFFER_LIMIT, 10)||15;
+// Initial spot retention; once changed from /admin, the value stored in SQLite (setting ttl_seconds) wins
 const TTL_SECONDS=parseInt(process.env.TTL_SECONDS, 10)||604800;
+const TTL_MIN_DAYS=1;
+const TTL_MAX_DAYS=3650;
 const RECONNECT_DELAY_MS=parseInt(process.env.RECONNECT_DELAY_MS, 10)||10000;
 const FLUSH_INTERVAL_MS=parseInt(process.env.FLUSH_INTERVAL_MS, 10)||5000;
 const CONNECT_TIMEOUT_MS=parseInt(process.env.CONNECT_TIMEOUT_MS, 10)||15000;
@@ -608,6 +611,31 @@ fastify.register(async (instance) => {
 
         admin.get('/status', async () => getSystemStatus());
 
+        // Spot retention (TTL). The preview tells how many spots a shorter retention would delete.
+        const parseDays = (v) => {
+            const days = Number(v);
+            return Number.isFinite(days) && days >= TTL_MIN_DAYS && days <= TTL_MAX_DAYS ? days : null;
+        };
+
+        admin.get('/settings/ttl', async () => ({ ...getTtlSetting(), minDays: TTL_MIN_DAYS, maxDays: TTL_MAX_DAYS }));
+
+        admin.get('/settings/ttl/preview', async (req, reply) => {
+            const days = parseDays(req.query.days);
+            if (!days) return reply.code(400).send({ error: `Retention must be between ${TTL_MIN_DAYS} and ${TTL_MAX_DAYS} days` });
+            const cutoff = new Date(Date.now() - days * 86400000);
+            return { days, toDelete: await spotsCollection.countDocuments({ timestamp: { $lt: cutoff } }) };
+        });
+
+        admin.put('/settings/ttl', async (req, reply) => {
+            const days = parseDays(req.body?.days);
+            if (!days) return reply.code(400).send({ error: `Retention must be between ${TTL_MIN_DAYS} and ${TTL_MAX_DAYS} days` });
+            const seconds = Math.round(days * 86400);
+            await ensureTtlIndex(seconds);
+            db.setSetting('ttl_seconds', seconds);
+            console.log(`Spot retention set to ${days} days from /admin by ${req.user.username}`);
+            return getTtlSetting();
+        });
+
         // Reference data (CTY, LoTW, eQSL, Club Log): force an update now
         admin.post('/reference/update', async (req, reply) => {
             referenceData.updateAll({ force: true }).catch(err => console.error('Reference update failed:', err.message));
@@ -978,17 +1006,23 @@ async function connectMongo() {
     }
 }
 
+function getTtlSetting() {
+    const stored = parseInt(db.getSetting('ttl_seconds'), 10);
+    return stored > 0 ? { seconds: stored, source: 'admin' } : { seconds: TTL_SECONDS, source: 'env' };
+}
+
 // TTL index on timestamp. createIndex() fails if the index already exists with another
-// expireAfterSeconds, so a changed TTL_SECONDS is applied to the existing index with collMod.
-async function ensureTtlIndex() {
+// expireAfterSeconds, so a changed retention is applied to the existing index with collMod.
+async function ensureTtlIndex(seconds = getTtlSetting().seconds) {
     const indexes = await spotsCollection.indexes();
     const ttl = indexes.find(i => JSON.stringify(i.key) === JSON.stringify({ timestamp: 1 }));
     if (!ttl) {
-        await spotsCollection.createIndex({ timestamp: 1 }, { expireAfterSeconds: TTL_SECONDS });
-    } else if (ttl.expireAfterSeconds !== TTL_SECONDS) {
-        await mongoClient.db(DB_NAME).command({ collMod: COLLECTION_NAME, index: { keyPattern: { timestamp: 1 }, expireAfterSeconds: TTL_SECONDS } });
-        console.log(`Spot retention changed: ${ttl.expireAfterSeconds}s -> ${TTL_SECONDS}s`);
+        await spotsCollection.createIndex({ timestamp: 1 }, { expireAfterSeconds: seconds });
+    } else if (ttl.expireAfterSeconds !== seconds) {
+        await mongoClient.db(DB_NAME).command({ collMod: COLLECTION_NAME, index: { keyPattern: { timestamp: 1 }, expireAfterSeconds: seconds } });
+        console.log(`Spot retention changed: ${ttl.expireAfterSeconds}s -> ${seconds}s`);
     }
+    storageCache = { at: 0, data: null };
 }
 
 // Heavier storage figures for /admin, cached for 5 minutes (the page refreshes every 10 s)
@@ -1009,6 +1043,7 @@ async function getStorageInfo() {
             last24h,
             oldest: oldest?.timestamp || null,
             ttlSeconds: ttl ? ttl.expireAfterSeconds : null,
+            ttlSource: getTtlSetting().source,
             indexCount: indexes.length
         }
     };
