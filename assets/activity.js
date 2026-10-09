@@ -224,6 +224,109 @@ function renderPaths(d) {
     });
 }
 
+// --- Mapa de calor mundial ---
+// Base: Natural Earth 1:110m (world.json), proyección equirectangular x = lon + 180, y = 90 - lat.
+// Se recorta a latitudes 85°N..60°S (sin Antártida), como el viewBox "0 5 360 145".
+const MAP_Y0 = 5, MAP_H = 145;
+const HEAT_RAMP = [[29, 42, 64, 0], [36, 69, 107, 0.55], [47, 106, 166, 0.75], [77, 163, 255, 0.9], [169, 211, 255, 0.95], [235, 245, 255, 1]];
+let mapWho = 'spotted';
+try { mapWho = localStorage.getItem('dxactivity-map') === 'spotters' ? 'spotters' : 'spotted'; } catch (_) { /* ignore */ }
+let worldLoaded = null;
+let mapPoints = [];
+
+function loadWorld() {
+    if (!worldLoaded) {
+        worldLoaded = fetch('/world.json').then(r => r.json()).then(w => {
+            let grat = '';
+            for (let lon = 0; lon <= 360; lon += 30) grat += `M${lon} 0V180`;
+            for (let lat = 0; lat <= 180; lat += 30) grat += `M0 ${lat}H360`;
+            $('map-base').innerHTML = `<path class="graticule" d="${grat}"/><path class="land" d="${w.land}"/><path class="borders" d="${w.borders}"/>`;
+        }).catch(() => { worldLoaded = null; });
+    }
+    return worldLoaded;
+}
+
+function heatColor(a) {
+    const x = Math.min(1, a) * (HEAT_RAMP.length - 1);
+    const i = Math.min(HEAT_RAMP.length - 2, Math.floor(x));
+    const f = x - i, c0 = HEAT_RAMP[i], c1 = HEAT_RAMP[i + 1];
+    return c0.map((v, k) => v + (c1[k] - v) * f);
+}
+
+function renderMap(d) {
+    const wrap = $('map');
+    const canvas = $('map-heat');
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    if (!W || !H) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const pts = (d.map?.[mapWho] || []).filter(p => p.lat <= 90 - MAP_Y0 && p.lat >= 90 - MAP_Y0 - MAP_H);
+    const total = pts.reduce((a, p) => a + p.count, 0);
+    const max = Math.max(1, ...pts.map(p => p.count));
+    const px = (p) => [(p.lon + 180) / 360 * W, (90 - p.lat - MAP_Y0) / MAP_H * H];
+    mapPoints = pts.map(p => ({ ...p, xy: px(p) })).sort((a, b) => a.count - b.count);
+    $('map-note').textContent = t('av.mapNote', { n: fmtNum(pts.length) });
+    $('map-ramp').style.background = `linear-gradient(90deg, ${HEAT_RAMP.slice(1).map(c => `rgb(${c[0]},${c[1]},${c[2]})`).join(',')})`;
+    if (!pts.length) return;
+
+    // 1) Intensidad en escala de grises (alfa acumulado), 2) coloreado con la rampa azul
+    const off = document.createElement('canvas');
+    off.width = canvas.width;
+    off.height = canvas.height;
+    const o = off.getContext('2d');
+    const baseR = Math.max(8, W / 70) * dpr;
+    for (const p of mapPoints) {
+        const w = Math.sqrt(p.count / max);
+        const r = baseR * (0.7 + 0.8 * w);
+        const [x, y] = p.xy.map(v => v * dpr);
+        const g = o.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, `rgba(0,0,0,${Math.max(0.12, w)})`);
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        o.fillStyle = g;
+        o.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+    const img = o.getImageData(0, 0, off.width, off.height);
+    const px4 = img.data;
+    for (let i = 3; i < px4.length; i += 4) {
+        const a = px4[i] / 255;
+        if (!a) continue;
+        const [r, g, b, alpha] = heatColor(a);
+        px4[i - 3] = r; px4[i - 2] = g; px4[i - 1] = b; px4[i] = Math.round(Math.min(1, alpha * (0.35 + a)) * 255);
+    }
+    ctx.putImageData(img, 0, 0);
+
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', t('av.mapAria'));
+    canvas.onmousemove = (evt) => {
+        const r = canvas.getBoundingClientRect();
+        const mx = evt.clientX - r.left, my = evt.clientY - r.top;
+        let best = null, bestD = 18 * 18;
+        for (const p of mapPoints) {
+            const dx = p.xy[0] - mx, dy = p.xy[1] - my, dd = dx * dx + dy * dy;
+            // A igual distancia gana el punto con más spots
+            if (dd < bestD || (best && dd === bestD && p.count > best.count)) { best = p; bestD = dd; }
+        }
+        const marker = $('map-marker');
+        if (!best) { marker.hidden = true; return hideTip(); }
+        marker.hidden = false;
+        marker.style.left = `${best.xy[0]}px`;
+        marker.style.top = `${best.xy[1]}px`;
+        showTip(evt, `<b>${esc(best.country || '')}</b>${best.prefix ? ` · ${esc(best.prefix)}` : ''}<br>${esc(t('av.mapTip', { n: fmtNum(best.count), pct: pct(best.count, total) }))}`);
+    };
+    canvas.onmouseleave = () => { $('map-marker').hidden = true; hideTip(); };
+}
+
+function setMapWho(who) {
+    mapWho = who;
+    try { localStorage.setItem('dxactivity-map', who); } catch (_) { /* ignore */ }
+    document.querySelectorAll('#map-switch button').forEach(b => b.setAttribute('aria-pressed', b.dataset.who === who ? 'true' : 'false'));
+    if (data) renderMap(data);
+}
+
 // --- Rankings ---
 const flag = (adif) => adif ? `<img class="flag" src="/flags/${encodeURIComponent(adif)}.svg" alt="" onerror="this.style.visibility='hidden'">` : '<span class="flag"></span>';
 
@@ -253,6 +356,7 @@ function renderLists(d) {
 function renderAll() {
     if (!data) return;
     renderKpis(data);
+    loadWorld().then(() => renderMap(data));
     renderTimeline(data);
     renderHeatmap(data);
     renderBars('bands', presentBands(data).map(b => data.bands.find(x => x.name === b)), data.total, bandLabel);
@@ -294,6 +398,8 @@ function setWindow(m) {
 document.addEventListener('DOMContentLoaded', () => {
     $('window-switch').setAttribute('aria-label', t('av.window'));
     document.querySelectorAll('#window-switch button').forEach(b => { b.onclick = () => setWindow(+b.dataset.min); });
+    document.querySelectorAll('#map-switch button').forEach(b => { b.onclick = () => setMapWho(b.dataset.who); });
+    setMapWho(mapWho);
     setWindow(minutes);
     setInterval(load, REFRESH_MS);
     // Redibujar al cambiar el ancho (los gráficos se dibujan al tamaño real)

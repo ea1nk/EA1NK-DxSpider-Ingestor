@@ -6,23 +6,26 @@ Base URL: `http://localhost:3000`
 
 `POST /login`
 
-Returns a JWT token to call protected endpoints.
+Returns a JWT token for a user created in `/admin` (max 10 failed attempts per IP every 15 minutes).
 
 Request:
 
 ```bash
 curl -X POST "http://localhost:3000/login" \
   -H "Content-Type: application/json" \
-  -d '{"password":"radio_password"}'
+  -d '{"username":"admin","password":"your-password"}'
 ```
 
 Response:
 
 ```json
 {
-  "token": "<jwt-token>"
+  "token": "<jwt-token>",
+  "user": { "id": 1, "username": "admin", "role": "admin" }
 }
 ```
+
+Legacy: `{"password":"<API_PASSWORD>"}` without username returns a read-only API token if `API_PASSWORD` is set.
 
 Use this header for protected requests:
 
@@ -30,38 +33,29 @@ Use this header for protected requests:
 
 ## 2) Spot history
 
-`GET /api/spots` (JWT protected)
+`GET /api/spots` (JWT protected unless `DISABLE_TOKEN_AUTH=true`)
 
 Returns spots sorted by `timestamp` descending.
 
 Supported filters:
 
-- `rbn=true|false`
 - `mode=<value>`
 - `band=<value>`
-- `callsign=<regex on spotter>`
-- `spotterCountry=<text>`
-- `spottedCountry=<text>`
-- `country=<text>` (spotter OR spotted)
-- `spotterPrefix=<prefix>`
-- `spottedPrefix=<prefix>`
-- `prefix=<prefix>` (spotter OR spotted)
-- `spotterContinent=<EU|AS|NA|...>`
-- `spottedContinent=<EU|AS|NA|...>`
-- `continent=<EU|AS|NA|...>` (spotter OR spotted)
-- `limit=<n>` (default `100`)
+- `limit=<n>` (default `100`, max `1000`)
 
-Examples:
+Example:
 
 ```bash
-curl "http://localhost:3000/api/spots?limit=20" \
+curl "http://localhost:3000/api/spots?band=20m&mode=CW&limit=20" \
   -H "Authorization: Bearer <jwt-token>"
 ```
 
-```bash
-curl "http://localhost:3000/api/spots?country=Spain&prefix=EA&continent=EU" \
-  -H "Authorization: Bearer <jwt-token>"
-```
+## 2b) Activity and space weather (public)
+
+- `GET /api/activity`: last-hour counts by band, mode, country, callsign and source.
+- `GET /api/activity?detail=1&minutes=15|60|360|1440`: full statistics used by `/activity` (time series, band × time heatmap, continent paths, world map points).
+- `GET /api/space-weather`: solar indices, band conditions, Kp, X-ray, solar wind and NOAA scales.
+- `GET /health`: service and DX cluster status (503 when every source has been down for a while).
 
 ## 3) Real-time stream
 

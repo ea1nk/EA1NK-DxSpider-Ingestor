@@ -772,6 +772,16 @@ async function computeActivityDetail(minutes) {
         { $limit: limit }
     ];
     const distinct=(field) => [{ $group: { _id: field } }, { $count: 'n' }];
+    // Spots grouped by CTY coordinates (centre of the entity or of the prefix area)
+    const points=(who) => [
+        { $group: {
+            _id: { lat: `$cty.${who}.data.Latitude`, lon: `$cty.${who}.data.Longitude` },
+            count: { $sum: 1 },
+            country: { $first: `$cty.${who}.data.Country` },
+            prefix: { $first: `$cty.${who}.matchedCallsign` }
+        } },
+        { $match: { '_id.lat': { $ne: null }, '_id.lon': { $ne: null } } }
+    ];
 
     const [r]=await spotsCollection.aggregate([
         { $match: { timestamp: { $gte: since } } },
@@ -789,9 +799,13 @@ async function computeActivityDetail(minutes) {
             countries: top('$cty.spotted.data.Country', 15, { adif: { $first: '$cty.spotted.data.ADIF' }, continent: { $first: '$cty.spotted.data.Continent' } }),
             calls: top('$spotted', 15, { country: { $first: '$cty.spotted.data.Country' }, adif: { $first: '$cty.spotted.data.ADIF' }, bands: { $addToSet: '$band' } }),
             spotters: top('$spotter', 10, { country: { $first: '$cty.spotter.data.Country' }, adif: { $first: '$cty.spotter.data.ADIF' } }),
-            sources: top('$source', 20)
+            sources: top('$source', 20),
+            mapSpotted: points('spotted'),
+            mapSpotters: points('spotter')
         } }
     ], { allowDiskUse: true }).toArray();
+    // CTY longitudes are positive to the west: convert to standard (east positive)
+    const toPoints=(rows) => rows.map(x => ({ lat: x._id.lat, lon: -x._id.lon, count: x.count, country: x.country, prefix: x.prefix }));
 
     const n=(arr) => arr[0]?.n || 0;
     const data={
@@ -814,7 +828,8 @@ async function computeActivityDetail(minutes) {
         countries: r.countries.map(x => ({ name: x._id, count: x.count, adif: x.adif, continent: x.continent })),
         calls: r.calls.map(x => ({ name: x._id, count: x.count, country: x.country, adif: x.adif, bands: x.bands })),
         spotters: r.spotters.map(x => ({ name: x._id, count: x.count, country: x.country, adif: x.adif })),
-        sources: r.sources.map(x => ({ name: x._id, count: x.count }))
+        sources: r.sources.map(x => ({ name: x._id, count: x.count })),
+        map: { spotted: toPoints(r.mapSpotted), spotters: toPoints(r.mapSpotters) }
     };
     activityDetailCache.set(minutes, { at: Date.now(), data });
     return data;

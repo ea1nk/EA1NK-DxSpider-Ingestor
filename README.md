@@ -19,10 +19,12 @@
 This repository is designed to run in Docker and is part of the EA1NK-Docker-DxSpider project:
 https://github.com/ea1nk/EA1NK-Docker-DxSpider
 
-Node.js service that ingests DX spots, enriches them with CTY data from `cty_dict.json`, stores them in MongoDB, and exposes:
-- JWT login endpoint
-- Historical query endpoint with filters
-- WebSocket stream for real-time spots
+Node.js service that ingests DX spots from one or more DX clusters, enriches them with CTY data from `cty_dict.json`, stores them in MongoDB, and provides:
+- A live spots web page with propagation data and filters
+- An activity statistics page with a world heatmap
+- An administration panel (sources, users, system status) with JWT login
+- A REST API (history, activity, space weather) and a WebSocket stream for real-time spots
+- Spanish and English interface
 
 ## Runtime overview
 
@@ -33,6 +35,29 @@ Node.js service that ingests DX spots, enriches them with CTY data from `cty_dic
 5. Serves the web UI, API and WebSocket with Fastify on port `3000`.
 
 Users, DX cluster sources and settings are stored in SQLite (`DATA_DIR/ingestor.db`, mounted at `./data` by `docker-compose.yml`). Spots stay in MongoDB.
+
+## Web views
+
+All pages are in Spanish by default, with an ES | EN switch in the header (or `?lang=en`). They share a `Powered by EA1NK - SCQ Devices` footer.
+
+### `/` Live spots
+- Real-time spot table (one line per spot) with UTC time, frequency, DXCC entity and flag, mode, LoTW/eQSL, spotter and comment/SNR. Double-click a callsign to open QRZ.
+- Filter bar: bands, modes, RBN/manual, LoTW/eQSL and watched callsigns; active filters shown as removable chips, remembered in the browser.
+- Space weather: SFI and SSN (30-day trend), A and K indices, X-ray class, solar wind, Bz, HF noise and NOAA R/S/G scales.
+- Side panel: HF band conditions day/night, band activity and most active entities/callsigns (last hour), Kp (3 days + NOAA forecast), GOES X-ray (6 h), VHF conditions and a live image of the Sun (NASA SDO).
+- UTC/local clocks and DX cluster connection status. Reconnects automatically and recovers recent spots after a disconnection.
+
+### `/activity` Activity statistics
+Period selector (15 min, 1 h, 6 h, 24 h), refreshed every minute:
+- KPIs: spots and spots/min, unique callsigns, DXCC entities, spotters, RBN vs manual, busiest band.
+- **World heatmap** of spot density, switchable between DX stations and spotters. Positions are approximate: CTY coordinates of the entity or prefix area (e.g. `K9` and `K` are different points).
+- Spots over time, band × time heatmap (with table view), bands and modes, continent-to-continent paths (who hears whom), most spotted DXCC entities and callsigns, most active spotters, and spots per source when there are several.
+
+### `/admin` Administration
+See below.
+
+### Error pages
+Browsers get styled 404/500 pages; API clients get JSON.
 
 ## Administration (`/admin`)
 
@@ -98,35 +123,19 @@ Current user, and change own password (`{ "currentPassword", "newPassword" }`).
 ## Endpoints
 
 ### `GET /api/spots` (protected)
-Returns spot history sorted by `timestamp` descending.
+Returns spot history sorted by `timestamp` descending. Requires a token unless `DISABLE_TOKEN_AUTH=true`.
 
 Query params:
 
-- `rbn`: `true` or `false`
-- `mode`: exact match against stored `mode` field
+- `mode`: exact match against stored `mode` field (auto uppercased)
 - `band`: exact match (`160m`, `80m`, `40m`, etc.)
-- `callsign`: regex match on `spotter`
-- `spotterCountry`: regex on `cty.spotter.data.Country`
-- `spottedCountry`: regex on `cty.spotted.data.Country`
-- `country`: generic country filter (spotter OR spotted)
-- `spotterPrefix`: prefix match on `cty.spotter.matchedCallsign`
-- `spottedPrefix`: prefix match on `cty.spotted.matchedCallsign`
-- `prefix`: generic prefix filter (spotter OR spotted)
-- `spotterContinent`: exact match on `cty.spotter.data.Continent` (auto uppercased)
-- `spottedContinent`: exact match on `cty.spotted.data.Continent` (auto uppercased)
-- `continent`: generic continent filter (spotter OR spotted)
-- `limit`: max results (default: `100`)
+- `limit`: max results (default: `100`, max: `1000`)
 
-Examples:
+Example:
 
 ```bash
 curl -H "Authorization: Bearer <token>" \
-  "http://localhost:3000/api/spots?spotterCountry=Spain&limit=50"
-```
-
-```bash
-curl -H "Authorization: Bearer <token>" \
-  "http://localhost:3000/api/spots?prefix=EA&continent=EU"
+  "http://localhost:3000/api/spots?band=20m&mode=CW&limit=50"
 ```
 
 ### `GET /api/space-weather` (public)
@@ -140,7 +149,9 @@ Solar indices and propagation data, refreshed every 15 minutes (`SPACE_WEATHER_R
 - `sources`: per-source status and last update
 
 ### `GET /api/activity` (public)
-Spot activity over the last 60 minutes from stored spots: `total`, and counts by `bands`, `modes`, `countries` and spotted `calls`. Cached for 60 s.
+Spot activity over the last 60 minutes from stored spots: `total`, and counts by `bands`, `modes`, `countries`, spotted `calls` and `sources`. Cached for 60 s.
+
+With `?detail=1&minutes=15|60|360|1440` it returns the data used by `/activity`: `timeline`, `bandTime` (band × time buckets), `continents` (spotter → DX continent), unique counts, RBN/manual split, top `countries`/`calls`/`spotters`, and `map.spotted` / `map.spotters` (spot counts per CTY coordinate, longitude east-positive). Results are cached (1 min for ≤ 1 h, 5 min otherwise) and the 6 h / 24 h windows are refreshed in the background.
 
 ### Admin API (`/api/admin/*`, role `admin`)
 
@@ -207,3 +218,5 @@ Example structure inserted into MongoDB:
 
 - Spots expire automatically after 7 days (TTL index on `timestamp`).
 - There are dedicated indexes for timestamp, RBN, CTY country, CTY prefix, and CTY continent fields.
+- Each spot also stores `source`: the name of the DX cluster source it came from.
+- The world map outline (`assets/world.json`) comes from Natural Earth 1:110m via world-atlas (public domain).

@@ -6,62 +6,56 @@ Base URL: `http://localhost:3000`
 
 `POST /login`
 
-Obtiene un token JWT para usar en endpoints protegidos.
+Devuelve un token JWT para un usuario creado en `/admin` (máximo 10 intentos fallidos por IP cada 15 minutos).
 
-Request:
+Peticion:
 
 ```bash
 curl -X POST "http://localhost:3000/login" \
   -H "Content-Type: application/json" \
-  -d '{"password":"radio_password"}'
+  -d '{"username":"admin","password":"tu-contraseña"}'
 ```
 
-Response:
+Respuesta:
 
 ```json
 {
-  "token": "<jwt-token>"
+  "token": "<jwt-token>",
+  "user": { "id": 1, "username": "admin", "role": "admin" }
 }
 ```
 
-Usar en requests protegidos:
+Compatibilidad: `{"password":"<API_PASSWORD>"}` sin usuario devuelve un token de solo lectura para la API si `API_PASSWORD` está definido.
+
+Usa esta cabecera en peticiones protegidas:
 
 `Authorization: Bearer <jwt-token>`
 
 ## 2) Historico de spots
 
-`GET /api/spots` (protegido con JWT)
+`GET /api/spots` (protegido con JWT salvo con `DISABLE_TOKEN_AUTH=true`)
 
 Devuelve spots ordenados por `timestamp` descendente.
 
 Filtros soportados:
 
-- `rbn=true|false`
 - `mode=<valor>`
 - `band=<valor>`
-- `callsign=<regex sobre spotter>`
-- `spotterCountry=<texto>`
-- `spottedCountry=<texto>`
-- `country=<texto>` (spotter OR spotted)
-- `spotterPrefix=<prefijo>`
-- `spottedPrefix=<prefijo>`
-- `prefix=<prefijo>` (spotter OR spotted)
-- `spotterContinent=<EU|AS|NA|...>`
-- `spottedContinent=<EU|AS|NA|...>`
-- `continent=<EU|AS|NA|...>` (spotter OR spotted)
-- `limit=<n>` (default `100`)
+- `limit=<n>` (por defecto `100`, máximo `1000`)
 
-Ejemplos:
+Ejemplo:
 
 ```bash
-curl "http://localhost:3000/api/spots?limit=20" \
+curl "http://localhost:3000/api/spots?band=20m&mode=CW&limit=20" \
   -H "Authorization: Bearer <jwt-token>"
 ```
 
-```bash
-curl "http://localhost:3000/api/spots?country=Spain&prefix=EA&continent=EU" \
-  -H "Authorization: Bearer <jwt-token>"
-```
+## 2b) Actividad y meteorología espacial (públicos)
+
+- `GET /api/activity`: recuentos de la última hora por banda, modo, país, indicativo y origen.
+- `GET /api/activity?detail=1&minutes=15|60|360|1440`: estadísticas completas de `/activity` (serie temporal, mapa de calor banda × hora, rutas entre continentes, puntos del mapa mundial).
+- `GET /api/space-weather`: índices solares, condiciones de bandas, Kp, rayos X, viento solar y escalas NOAA.
+- `GET /health`: estado del servicio y de los clusters (503 si todos los orígenes llevan un rato caídos).
 
 ## 3) Stream en tiempo real
 

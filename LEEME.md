@@ -19,11 +19,13 @@
 Este repositorio esta pensado para ejecutarse en Docker y forma parte del proyecto EA1NK-Docker-DxSpider:
 https://github.com/ea1nk/EA1NK-Docker-DxSpider
 
-Servicio Node.js que ingiere spots DX, los enriquece con datos CTY desde `cty_dict.json`, los guarda en MongoDB y expone:
+Servicio Node.js que ingiere spots DX de uno o varios clusters, los enriquece con datos CTY desde `cty_dict.json`, los guarda en MongoDB y ofrece:
 
-- Endpoint de login con JWT
-- Endpoint de consulta historica con filtros
-- WebSocket en tiempo real
+- Una web de spots en directo con datos de propagación y filtros
+- Una página de estadísticas de actividad con mapa de calor mundial
+- Un panel de administración (orígenes, usuarios, estado del sistema) con login JWT
+- Una API REST (histórico, actividad, meteorología espacial) y un WebSocket en tiempo real
+- Interfaz en castellano e inglés
 
 ## Flujo de funcionamiento
 
@@ -34,6 +36,29 @@ Servicio Node.js que ingiere spots DX, los enriquece con datos CTY desde `cty_di
 5. Sirve la web, la API y el WebSocket con Fastify en el puerto `3000`.
 
 Los usuarios, los orígenes de spots y los ajustes se guardan en SQLite (`DATA_DIR/ingestor.db`, montado en `./data` por `docker-compose.yml`). Los spots siguen en MongoDB.
+
+## Vistas web
+
+Todas las páginas están en castellano por defecto, con un selector ES | EN en la cabecera (o `?lang=en`). Comparten el pie `Powered by EA1NK - SCQ Devices`.
+
+### `/` Spots en directo
+- Tabla de spots en tiempo real (una línea por spot) con hora UTC, frecuencia, entidad DXCC con bandera, modo, LoTW/eQSL, spotter y comentario/SNR. Doble clic en un indicativo abre QRZ.
+- Barra de filtros: bandas, modos, RBN/manual, LoTW/eQSL e indicativos vigilados; los filtros activos aparecen como chips eliminables y se recuerdan en el navegador.
+- Meteorología espacial: SFI y SSN (tendencia de 30 días), índices A y K, clase de rayos X, viento solar, Bz, ruido HF y escalas NOAA R/S/G.
+- Panel lateral: condiciones HF de día y de noche, actividad por banda y entidades/indicativos más activos (última hora), Kp (3 días + previsión NOAA), rayos X GOES (6 h), condiciones VHF e imagen del Sol en directo (NASA SDO).
+- Relojes UTC y local y estado de la conexión al cluster. Reconecta sola y recupera los spots recientes tras un corte.
+
+### `/activity` Estadísticas de actividad
+Selector de periodo (15 min, 1 h, 6 h, 24 h), actualizado cada minuto:
+- Indicadores: spots y spots/min, indicativos únicos, entidades DXCC, spotters, RBN frente a manuales y banda más activa.
+- **Mapa de calor mundial** de la densidad de spots, alternando entre estaciones DX y spotters. Las posiciones son aproximadas: coordenadas CTY de la entidad o del área del prefijo (por ejemplo, `K9` y `K` son puntos distintos).
+- Spots en el tiempo, mapa de calor banda × hora (con vista en tabla), bandas y modos, rutas entre continentes (quién escucha a quién), entidades DXCC e indicativos más spoteados, spotters más activos y spots por origen cuando hay varios.
+
+### `/admin` Administración
+Ver más abajo.
+
+### Páginas de error
+Los navegadores reciben páginas 404/500 con estilo; los clientes de la API reciben JSON.
 
 ## Administración (`/admin`)
 
@@ -99,35 +124,19 @@ Usuario actual y cambio de la propia contraseña (`{ "currentPassword", "newPass
 ## Endpoints
 
 ### `GET /api/spots` (protegido)
-Devuelve historico de spots ordenado por `timestamp` descendente.
+Devuelve el histórico de spots ordenado por `timestamp` descendente. Requiere token salvo con `DISABLE_TOKEN_AUTH=true`.
 
 Query params:
 
-- `rbn`: `true` o `false`
-- `mode`: coincidencia exacta sobre el campo `mode`
+- `mode`: coincidencia exacta sobre el campo `mode` (se pasa a mayúsculas)
 - `band`: coincidencia exacta (`160m`, `80m`, `40m`, etc.)
-- `callsign`: regex sobre `spotter`
-- `spotterCountry`: regex en `cty.spotter.data.Country`
-- `spottedCountry`: regex en `cty.spotted.data.Country`
-- `country`: filtro generico de pais (spotter OR spotted)
-- `spotterPrefix`: prefijo en `cty.spotter.matchedCallsign`
-- `spottedPrefix`: prefijo en `cty.spotted.matchedCallsign`
-- `prefix`: filtro generico de prefijo (spotter OR spotted)
-- `spotterContinent`: coincidencia exacta en `cty.spotter.data.Continent` (se pasa a mayusculas)
-- `spottedContinent`: coincidencia exacta en `cty.spotted.data.Continent` (se pasa a mayusculas)
-- `continent`: filtro generico de continente (spotter OR spotted)
-- `limit`: maximo de resultados (por defecto: `100`)
+- `limit`: máximo de resultados (por defecto: `100`, máximo: `1000`)
 
-Ejemplos:
+Ejemplo:
 
 ```bash
 curl -H "Authorization: Bearer <token>" \
-  "http://localhost:3000/api/spots?spotterCountry=Spain&limit=50"
-```
-
-```bash
-curl -H "Authorization: Bearer <token>" \
-  "http://localhost:3000/api/spots?prefix=EA&continent=EU"
+  "http://localhost:3000/api/spots?band=20m&mode=CW&limit=50"
 ```
 
 ### `GET /api/space-weather` (público)
@@ -141,7 +150,9 @@ curl -H "Authorization: Bearer <token>" \
 - `sources`: estado y última actualización de cada fuente
 
 ### `GET /api/activity` (público)
-Actividad de spots en los últimos 60 minutos a partir de los spots guardados: `total` y recuentos por `bands`, `modes`, `countries` e indicativos (`calls`). Cacheado 60 s.
+Actividad de spots en los últimos 60 minutos a partir de los spots guardados: `total` y recuentos por `bands`, `modes`, `countries`, indicativos (`calls`) y orígenes (`sources`). Cacheado 60 s.
+
+Con `?detail=1&minutes=15|60|360|1440` devuelve los datos de `/activity`: `timeline`, `bandTime` (banda × intervalo), `continents` (continente del spotter → del DX), recuentos únicos, división RBN/manual, rankings de `countries`/`calls`/`spotters` y `map.spotted` / `map.spotters` (spots por coordenada CTY, longitud positiva al este). Los resultados se cachean (1 min para ≤ 1 h, 5 min en el resto) y las ventanas de 6 h y 24 h se recalculan en segundo plano.
 
 ### API de administración (`/api/admin/*`, rol `admin`)
 
@@ -208,3 +219,5 @@ Ejemplo de spot guardado:
 
 - Los spots caducan automaticamente a los 7 dias (indice TTL en `timestamp`).
 - Hay indices para `timestamp`, `rbn`, pais CTY, prefijo CTY y continente CTY.
+- Cada spot guarda también `source`: el nombre del origen (cluster DX) del que llegó.
+- El contorno del mapa mundial (`assets/world.json`) procede de Natural Earth 1:110m a través de world-atlas (dominio público).
