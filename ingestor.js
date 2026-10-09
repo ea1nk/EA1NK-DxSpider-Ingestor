@@ -14,6 +14,7 @@ const jwt=require('@fastify/jwt');
 const fp = require('fastify-plugin');
 const { lookupCallsignInfo, reloadReferenceData, preloadReferenceData, referenceCounts }=require('./callsignLookup');
 const referenceData=require('./referenceData');
+const { createReports }=require('./reports');
 const { startSpaceWeather, getSpaceWeather }=require('./spaceWeather');
 const db=require('./db');
 const auth=require('./auth');
@@ -59,6 +60,7 @@ const SOURCE_OPTS={
 
 let spotsCollection;
 let mongoClient;
+let reports;
 let buffer=[];
 const clients=new Set();
 let flushTimer;
@@ -588,11 +590,24 @@ fastify.register(async (instance) => {
     // Spot activity over the last ACTIVITY_WINDOW_MIN minutes, computed from stored spots
     // ?detail=1 adds time series, band/time heatmap, continent paths and unique counts
     // for the /activity page; ?minutes= selects the window (15, 60, 360 or 1440)
-    instance.get('/api/activity', async (req) => {
+    // ?day=YYYY-MM-DD or ?month=YYYY-MM return the day/month report (UTC) in the same format
+    instance.get('/api/activity', async (req, reply) => {
+        const { day, month } = req.query;
+        if (day !== undefined) {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return reply.code(400).send({ error: 'day must be YYYY-MM-DD' });
+            return (await reports.getDay(day)) || reply.code(404).send({ error: 'No data for this day' });
+        }
+        if (month !== undefined) {
+            if (!/^\d{4}-\d{2}$/.test(month)) return reply.code(400).send({ error: 'month must be YYYY-MM' });
+            return (await reports.getMonth(month)) || reply.code(404).send({ error: 'No data for this month' });
+        }
         const minutes = parseInt(req.query.minutes, 10);
         if (req.query.detail) return getActivityDetail(ACTIVITY_WINDOWS[minutes] ? minutes : 60);
         return getActivity();
     });
+
+    // First and last day available for the day/month reports
+    instance.get('/api/reports/range', async () => reports.range());
 
     // Historical API
     const spotsAuth = DISABLE_TOKEN_AUTH ? [] : [instance.authenticate];
@@ -798,8 +813,22 @@ function startActivityWarmup() {
 
 async function computeActivityDetail(minutes) {
     const now=Date.now();
-    const bucketMs=ACTIVITY_WINDOWS[minutes] * 60 * 1000;
-    const since=new Date(now - minutes * 60 * 1000);
+    const data=await aggregateSpots({
+        from: new Date(now - minutes * 60 * 1000),
+        to: new Date(now),
+        bucketMinutes: ACTIVITY_WINDOWS[minutes]
+    });
+    activityDetailCache.set(minutes, { at: Date.now(), data });
+    return data;
+}
+
+// Statistics of the spots in [from, to): used by /activity (live windows) and by the
+// daily summaries behind the day/month reports. `limits` sets the size of the top lists.
+async function aggregateSpots({ from, to, bucketMinutes, limits = {} }) {
+    const L={ countries: 15, calls: 15, spotters: 10, ...limits };
+    const now=Date.now();
+    const bucketMs=bucketMinutes * 60 * 1000;
+    const since=from;
     const tsLong={ $toLong: '$timestamp' };
     const bucket={ $subtract: [tsLong, { $mod: [tsLong, bucketMs] }] };
     const count=(id) => [{ $group: { _id: id, count: { $sum: 1 } } }];
@@ -826,7 +855,7 @@ async function computeActivityDetail(minutes) {
     ];
 
     const [r]=await spotsCollection.aggregate([
-        { $match: { timestamp: { $gte: since } } },
+        { $match: { timestamp: { $gte: since, $lt: to } } },
         { $facet: {
             total: [{ $count: 'n' }],
             uniqueCalls: distinct('$spotted'),
@@ -839,9 +868,9 @@ async function computeActivityDetail(minutes) {
             bands: top('$band', 20),
             modes: top('$mode', 12),
             continents: count({ from: '$cty.spotter.data.Continent', to: '$cty.spotted.data.Continent' }),
-            countries: top('$cty.spotted.data.Country', 15, { adif: { $first: '$cty.spotted.data.ADIF' }, continent: { $first: '$cty.spotted.data.Continent' } }),
-            calls: top('$spotted', 15, { country: { $first: '$cty.spotted.data.Country' }, adif: { $first: '$cty.spotted.data.ADIF' }, bands: { $addToSet: '$band' } }),
-            spotters: top('$spotter', 10, { country: { $first: '$cty.spotter.data.Country' }, adif: { $first: '$cty.spotter.data.ADIF' } }),
+            countries: top('$cty.spotted.data.Country', L.countries, { adif: { $first: '$cty.spotted.data.ADIF' }, continent: { $first: '$cty.spotted.data.Continent' } }),
+            calls: top('$spotted', L.calls, { country: { $first: '$cty.spotted.data.Country' }, adif: { $first: '$cty.spotted.data.ADIF' }, bands: { $addToSet: '$band' } }),
+            spotters: top('$spotter', L.spotters, { country: { $first: '$cty.spotter.data.Country' }, adif: { $first: '$cty.spotter.data.ADIF' } }),
             sources: top('$source', 20),
             // QSL services of the spotted stations: unique stations and spots per service
             qslCalls: [
@@ -876,11 +905,11 @@ async function computeActivityDetail(minutes) {
     const toPoints=(rows) => rows.map(x => ({ lat: x._id.lat, lon: x._id.lon, count: x.count, country: x.country, prefix: x.prefix }));
 
     const n=(arr) => arr[0]?.n || 0;
-    const data={
-        minutes,
-        bucketMinutes: ACTIVITY_WINDOWS[minutes],
+    return {
+        minutes: Math.round((Math.min(to.getTime(), now) - since.getTime()) / 60000),
+        bucketMinutes,
         from: since.getTime(),
-        to: now,
+        to: Math.min(to.getTime(), now),
         generatedAt: now,
         total: n(r.total),
         uniqueCalls: n(r.uniqueCalls),
@@ -904,8 +933,6 @@ async function computeActivityDetail(minutes) {
             return Object.fromEntries(['lotw', 'eqsl', 'clublog', 'oqrs', 'none'].map(k => [k, { calls: c[k] || 0, spots: sp[k] || 0 }]));
         })()
     };
-    activityDetailCache.set(minutes, { at: Date.now(), data });
-    return data;
 }
 
 // System status and statistics for /admin
@@ -1056,6 +1083,7 @@ async function start() {
     spotsCollection=mongoClient.db(DB_NAME).collection(COLLECTION_NAME);
     await spotsCollection.createIndex({ timestamp: -1 });
     await ensureTtlIndex();
+    reports=createReports({ mongoDb: mongoClient.db(DB_NAME), spots: spotsCollection, aggregateSpots });
 
     scheduleBufferFlush();
     await fastify.listen({ port: SERVER_PORT, host: SERVER_HOST });
@@ -1063,6 +1091,7 @@ async function start() {
     startWsHeartbeat();
     startSpaceWeather();
     startActivityWarmup();
+    reports.start();
     // Weekly refresh of CTY, LoTW, eQSL and Club Log data; reload right after each update
     preloadReferenceData();
     referenceData.startReferenceUpdates((key) => {

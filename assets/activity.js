@@ -14,10 +14,28 @@ const pct = (part, total) => total ? Math.round(part / total * 1000) / 10 : 0;
 const hhmm = (ms) => { const d = new Date(ms); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
 const bandLabel = (b) => b === 'OTRO' ? t('act.other') : b;
 
-let minutes = (() => {
-    const w = parseInt(new URLSearchParams(location.search).get('w'), 10);
-    return WINDOWS.includes(w) ? w : 60;
+// Periodo mostrado: ventana en tiempo real (15 min-24 h) o informe de un día / mes (UTC)
+let period = (() => {
+    const q = new URLSearchParams(location.search);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(q.get('day') || '')) return { type: 'day', key: q.get('day') };
+    if (/^\d{4}-\d{2}$/.test(q.get('month') || '')) return { type: 'month', key: q.get('month') };
+    const w = parseInt(q.get('w'), 10);
+    return { type: 'live', minutes: WINDOWS.includes(w) ? w : 60 };
 })();
+let reportRange = null;
+const todayKey = () => new Date().toISOString().slice(0, 10);
+const isLivePeriod = () => period.type === 'live' || (period.type === 'day' && period.key === todayKey()) || (period.type === 'month' && period.key === todayKey().slice(0, 7));
+
+// Etiquetas de tiempo: horas para ventanas e informes diarios, fechas para los mensuales
+const ddmmm = (ms) => new Date(ms).toLocaleDateString(LOCALE, { day: '2-digit', month: 'short', timeZone: 'UTC' });
+const timeLabel = (d, t0) => d.bucketMinutes >= 1440 ? ddmmm(t0) : hhmm(t0);
+const rangeLabel = (d, t0) => d.bucketMinutes >= 1440 ? ddmmm(t0) : `${hhmm(t0)}–${hhmm(t0 + d.bucketMinutes * 60000)} UTC`;
+// Unas 8 marcas en el eje: en las ventanas en tiempo real, a horas redondas
+function isTick(d, t0, i, n) {
+    if (period.type === 'live') return t0 % tickEvery(d) === 0;
+    const step = Math.max(1, Math.ceil(n / 8));
+    return i % step === 0;
+}
 let data = null;
 let loadSeq = 0;
 
@@ -77,12 +95,12 @@ function renderKpis(d) {
 function buckets(d) {
     const size = d.bucketMinutes * 60000;
     const out = [];
-    for (let t0 = Math.floor(d.from / size) * size; t0 <= d.to; t0 += size) out.push(t0);
+    for (let t0 = Math.floor(d.from / size) * size; t0 < d.to || (t0 === Math.floor(d.from / size) * size); t0 += size) out.push(t0);
     return out;
 }
 
 function tickEvery(d) {
-    return { 15: 5, 60: 15, 360: 60, 1440: 180 }[d.minutes] * 60000;
+    return ({ 15: 5, 60: 15, 360: 60, 1440: 180 }[period.minutes] || 60) * 60000;
 }
 
 // --- Línea temporal (una serie: el título la nombra, sin leyenda) ---
@@ -107,8 +125,7 @@ function renderTimeline(d) {
         grid += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${L - 6}" y="${y(v) + 3}" class="axis" text-anchor="end">${fmtCompact(v)}</text>`;
     });
     let ticks = '';
-    const every = tickEvery(d);
-    pts.forEach((p, i) => { if (p.t % every === 0) ticks += `<text x="${x(i)}" y="${H - 6}" class="axis" text-anchor="middle">${hhmm(p.t)}</text>`; });
+    pts.forEach((p, i) => { if (isTick(d, p.t, i, pts.length)) ticks += `<text x="${x(i)}" y="${H - 6}" class="axis" text-anchor="middle">${timeLabel(d, p.t)}</text>`; });
     const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.count).toFixed(1)}`).join('');
     const area = `${line}L${x(pts.length - 1).toFixed(1)},${T + ph}L${x(0).toFixed(1)},${T + ph}Z`;
     const last = pts.length - 1;
@@ -128,7 +145,7 @@ function renderTimeline(d) {
         const i = Math.max(0, Math.min(last, Math.round((rel - L) / pw * (pts.length - 1))));
         cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.setAttribute('visibility', 'visible');
         dot.setAttribute('cx', x(i)); dot.setAttribute('cy', y(pts[i].count)); dot.setAttribute('visibility', 'visible');
-        showTip(evt, `<b>${hhmm(pts[i].t)}–${hhmm(pts[i].t + d.bucketMinutes * 60000)} UTC</b><br>${fmtNum(pts[i].count)} spots`);
+        showTip(evt, `<b>${rangeLabel(d, pts[i].t)}</b><br>${fmtNum(pts[i].count)} spots`);
     };
     svg.querySelector('.hit').onmouseleave = () => { cross.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden'); hideTip(); };
 }
@@ -155,7 +172,6 @@ function renderHeatmap(d) {
     const H = T + bands.length * rowH + B;
     const cw = (W - L - R) / xs.length;
     let cells = '', labels = '', ticks = '';
-    const every = tickEvery(d);
     bands.forEach((band, r) => {
         const yy = T + r * rowH;
         labels += `<text x="${L - 8}" y="${yy + rowH / 2 + 4}" class="axis band" text-anchor="end">${esc(bandLabel(band))}</text>`;
@@ -166,7 +182,7 @@ function renderHeatmap(d) {
             cells += `<rect class="cell" data-b="${esc(band)}" data-c="${c}" x="${(L + c * cw).toFixed(1)}" y="${yy}" width="${cw.toFixed(1)}" height="${rowH}" rx="2" fill="${fill}"/>`;
         });
     });
-    xs.forEach((x, c) => { if (x % every === 0) ticks += `<text x="${(L + c * cw + cw / 2).toFixed(1)}" y="${H - 6}" class="axis" text-anchor="middle">${hhmm(x)}</text>`; });
+    xs.forEach((x, c) => { if (isTick(d, x, c, xs.length)) ticks += `<text x="${(L + c * cw + cw / 2).toFixed(1)}" y="${H - 6}" class="axis" text-anchor="middle">${timeLabel(d, x)}</text>`; });
     el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="chart" style="min-width:${W}px" role="img" aria-label="${esc(t('av.heatmapAria'))}">${cells}${labels}${ticks}</svg>`;
     $('ramp').style.background = `linear-gradient(90deg, ${RAMP.join(',')})`;
 
@@ -178,12 +194,12 @@ function renderHeatmap(d) {
         cell.classList.add('hover');
         const x0 = xs[cell.dataset.c];
         const v = grid.get(`${cell.dataset.b}|${x0}`) || 0;
-        showTip(evt, `<b>${esc(bandLabel(cell.dataset.b))}</b> · ${hhmm(x0)}–${hhmm(x0 + d.bucketMinutes * 60000)} UTC<br>${fmtNum(v)} spots`);
+        showTip(evt, `<b>${esc(bandLabel(cell.dataset.b))}</b> · ${rangeLabel(d, x0)}<br>${fmtNum(v)} spots`);
     };
     svg.onmouseleave = () => { svg.querySelectorAll('.cell.hover').forEach(c => c.classList.remove('hover')); hideTip(); };
 
     // Vista de tabla (los mismos datos, accesibles sin color)
-    $('heatmap-table').innerHTML = `<table class="data"><thead><tr><th>${esc(t('av.band'))}</th>${xs.map(x => `<th>${hhmm(x)}</th>`).join('')}<th>${esc(t('av.total'))}</th></tr></thead>
+    $('heatmap-table').innerHTML = `<table class="data"><thead><tr><th>${esc(t('av.band'))}</th>${xs.map(x => `<th>${timeLabel(d, x)}</th>`).join('')}<th>${esc(t('av.total'))}</th></tr></thead>
         <tbody>${bands.map(b => `<tr><td>${esc(bandLabel(b))}</td>${xs.map(x => `<td>${grid.get(`${b}|${x}`) || ''}</td>`).join('')}<td><b>${fmtNum(totals.get(b))}</b></td></tr>`).join('')}</tbody></table>`;
 }
 
@@ -265,7 +281,7 @@ function renderModeCounters(d) {
         svg.onmousemove = (evt) => {
             const r = svg.getBoundingClientRect();
             const i = Math.max(0, Math.min(vals.length - 1, Math.round((evt.clientX - r.left) / r.width * (vals.length - 1))));
-            showTip(evt, `<b>${hhmm(xs[i])}–${hhmm(xs[i] + d.bucketMinutes * 60000)} UTC</b><br>${fmtNum(vals[i])} spots`);
+            showTip(evt, `<b>${rangeLabel(d, xs[i])}</b><br>${fmtNum(vals[i])} spots`);
         };
         svg.onmouseleave = hideTip;
     });
@@ -532,14 +548,38 @@ function renderAll() {
     renderPaths(data);
     renderLists(data);
     const ago = Math.max(0, Math.round((Date.now() - data.generatedAt) / 1000));
-    $('meta-text').textContent = `${t('av.updated', { t: ago < 60 ? `${ago} s` : `${Math.round(ago / 60)} min` })} · ${t('av.refresh', { s: REFRESH_MS / 1000 })}`;
+    const updated = t('av.updated', { t: ago < 60 ? `${ago} s` : `${Math.round(ago / 60)} min` });
+    if (period.type === 'live') {
+        $('meta-text').textContent = `${updated} · ${t('av.refresh', { s: REFRESH_MS / 1000 })}`;
+    } else {
+        const label = period.type === 'day'
+            ? t('rep.dayTitle', { date: new Date(`${period.key}T00:00:00Z`).toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) })
+            : t('rep.monthTitle', { month: new Date(`${period.key}-01T00:00:00Z`).toLocaleDateString(LOCALE, { month: 'long', year: 'numeric', timeZone: 'UTC' }) });
+        $('meta-text').textContent = isLivePeriod() ? `${label} · ${t('rep.inProgress')} · ${updated}` : label;
+    }
 }
 
 async function load() {
     const seq = ++loadSeq;
     $('meta').classList.add('loading');
     try {
-        const res = await fetch(`/api/activity?detail=1&minutes=${minutes}`, { cache: 'no-store' });
+        const q = period.type === 'live' ? `detail=1&minutes=${period.minutes}` : `${period.type}=${period.key}`;
+        const res = await fetch(`/api/activity?${q}`, { cache: 'no-store' });
+        if (res.status === 404) {
+            if (seq !== loadSeq) return;
+            // Periodo sin datos: gráficos vacíos en lugar de los del periodo anterior
+            const from = period.type === 'day' ? Date.parse(`${period.key}T00:00:00Z`) : Date.parse(`${period.key}-01T00:00:00Z`);
+            data = {
+                minutes: 1440, bucketMinutes: period.type === 'day' ? 60 : 1440, from, to: from + 86400000, generatedAt: Date.now(),
+                total: 0, uniqueCalls: 0, uniqueCountries: 0, uniqueSpotters: 0, rbn: 0, manual: 0,
+                timeline: [], bandTime: [], modeTime: [], bands: [], modes: [], continents: [], countries: [], calls: [], spotters: [], sources: [],
+                map: { spotted: [], spotters: [] }, qsl: {}
+            };
+            $('error').hidden = true;
+            renderAll();
+            $('meta-text').textContent = t('rep.noData');
+            return;
+        }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const d = await res.json();
         if (seq !== loadSeq) return; // Llegó tarde: el usuario ya cambió de periodo
@@ -553,14 +593,37 @@ async function load() {
     }
 }
 
-function setWindow(m) {
-    minutes = m;
-    document.querySelectorAll('#window-switch button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.min === m ? 'true' : 'false'));
+function setPeriod(p) {
+    period = p;
+    const live = p.type === 'live';
+    document.querySelectorAll('#window-switch button').forEach(b => b.setAttribute('aria-pressed', live && +b.dataset.min === p.minutes ? 'true' : 'false'));
+    document.querySelectorAll('#report-switch button').forEach(b => b.setAttribute('aria-pressed', b.dataset.type === p.type ? 'true' : 'false'));
+    $('report-day').hidden = p.type !== 'day';
+    $('report-month').hidden = p.type !== 'month';
+    if (p.type === 'day') $('report-day').value = p.key;
+    if (p.type === 'month') $('report-month').value = p.key;
     const url = new URL(location.href);
-    url.searchParams.set('w', m);
+    ['w', 'day', 'month'].forEach(k => url.searchParams.delete(k));
+    url.searchParams.set(live ? 'w' : p.type, live ? p.minutes : p.key);
     history.replaceState(null, '', url);
     $('meta-text').textContent = t('av.loading');
     load();
+}
+const setWindow = (m) => setPeriod({ type: 'live', minutes: m });
+
+async function setupReports() {
+    try { reportRange = await (await fetch('/api/reports/range', { cache: 'no-store' })).json(); } catch (_) { reportRange = null; }
+    const last = reportRange?.lastDay || todayKey();
+    const first = reportRange?.firstDay || last;
+    $('report-day').min = first; $('report-day').max = last;
+    $('report-month').min = first.slice(0, 7); $('report-month').max = last.slice(0, 7);
+    document.querySelectorAll('#report-switch button').forEach(b => {
+        b.onclick = () => setPeriod(b.dataset.type === 'day'
+            ? { type: 'day', key: period.type === 'day' ? period.key : last }
+            : { type: 'month', key: period.type === 'month' ? period.key : last.slice(0, 7) });
+    });
+    $('report-day').onchange = () => { if ($('report-day').value) setPeriod({ type: 'day', key: $('report-day').value }); };
+    $('report-month').onchange = () => { if ($('report-month').value) setPeriod({ type: 'month', key: $('report-month').value }); };
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -569,8 +632,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('#map-switch button').forEach(b => { b.onclick = () => setMapWho(b.dataset.who); });
     setupMapInteraction();
     setMapWho(mapWho);
-    setWindow(minutes);
-    setInterval(load, REFRESH_MS);
+    setupReports();
+    setPeriod(period);
+    // Solo se refresca si el periodo incluye el momento actual
+    setInterval(() => { if (isLivePeriod()) load(); }, REFRESH_MS);
     // Redibujar al cambiar el ancho (los gráficos se dibujan al tamaño real)
     let rt;
     addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(renderAll, 200); });

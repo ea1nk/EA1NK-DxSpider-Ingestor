@@ -35,6 +35,10 @@
         .seg button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
         .seg button:focus-visible, .nav a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+        .report-picker { display: inline-flex; align-items: center; gap: 6px; }
+        .report-label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; }
+        .report-picker input { background: #12141c; color: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; font: inherit; font-size: 0.8rem; color-scheme: dark; }
+        .report-picker input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
         .meta { color: var(--muted); font-size: 0.74rem; margin: -4px 0 12px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
         .meta .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); display: inline-block; }
         .meta.loading .dot { background: var(--muted); animation: pulse 1s infinite alternate; }
@@ -205,6 +209,15 @@
                 <button type="button" data-min="360" data-i18n="av.w360">6 h</button>
                 <button type="button" data-min="1440" data-i18n="av.w1440">24 h</button>
             </div>
+            <div class="report-picker" style="display: none;">
+                <span class="report-label" data-i18n="rep.label">Informe</span>
+                <div class="seg" id="report-switch" role="group">
+                    <button type="button" data-type="day" data-i18n="rep.day">Día</button>
+                    <button type="button" data-type="month" data-i18n="rep.month">Mes</button>
+                </div>
+                <input type="date" id="report-day" hidden>
+                <input type="month" id="report-month" hidden>
+            </div>
             <div id="lang-switch" class="lang-switch" role="group" aria-label="Idioma">
                 <button type="button" data-lang="es" aria-pressed="true">ES</button>
                 <button type="button" data-lang="en" aria-pressed="false">EN</button>
@@ -293,7 +306,7 @@
 
     <footer class="site-footer">Powered by <b>EA1NK - SCQ Devices</b></footer>
 
-    <script src="/i18n.js?v=20261009o"></script>
-    <script src="/activity.js?v=20261009f"></script>
+    <script src="/i18n.js?v=20261009p"></script>
+    <script src="/activity.js?v=20261009g"></script>
 </body>
 </html>
