@@ -128,8 +128,10 @@ const SPOT_COLUMNS = [
     { cls: 'c-info', min: 140 }
 ];
 // El espacio sobrante se da por turnos: DX hasta que quepa (bandera, indicativo, país y locator),
-// Spotter hasta que quepa su país, y el resto a Info y DX
-const SPOT_GROW = [['c-dx', 340], ['c-spotter', 200], ['c-dx', 420], ['c-info', Infinity]];
+// Spotter hasta que quepa su país, Info hasta un ancho cómodo, DX hasta su máximo y el resto a Info
+const SPOT_GROW = [['c-dx', 340], ['c-spotter', 250], ['c-info', 220], ['c-dx', 420], ['c-info', Infinity]];
+// Por debajo de este ancho, la columna Spotter muestra la bandera en lugar del nombre del país
+const SPOTTER_COUNTRY_MIN = 250;
 
 function fitSpotColumns() {
     const container = document.querySelector('.table-container');
@@ -150,6 +152,7 @@ function fitSpotColumns() {
     });
     // Si no caben los mínimos, la tabla se desplaza en horizontal en vez de recortar
     table.style.width = `${Math.max(available, minTotal)}px`;
+    table.classList.toggle('compact-spotter', widths['c-spotter'] < SPOTTER_COUNTRY_MIN);
 }
 
 function renderSpots() {
@@ -179,6 +182,9 @@ function crearSpotRow(spot) {
     const flagImg = adif ? `<img src="/flags/${encodeURIComponent(adif)}.svg" class="flag" alt="" onerror="this.style.visibility='hidden'">` : '<span class="flag-empty"></span>';
     const { hasLotw, hasEqsl, hasClublog, hasOqrs } = getSpotQslFlags(spot);
     const locator = spot.cty?.spotted?.grid?.locator;
+    const spotterCountry = spot.cty?.spotter?.data?.Country || '';
+    const spotterAdif = spot.cty?.spotter?.data?.ADIF;
+    const spotterFlag = spotterAdif ? `<img src="/flags/${encodeURIComponent(spotterAdif)}.svg" class="spotter-flag" alt="${escHtml(spotterCountry)}" onerror="this.style.visibility='hidden'">` : '';
     const timeZ = spot.time_z ? `${spot.time_z.slice(0, 2)}:${spot.time_z.slice(2, 4)}` : '';
     const country = spot.cty?.spotted?.data?.Country || 'Unknown';
     const info = spot.snr ? `<span class="snr">${escHtml(spot.snr)} dB</span>` : `<i>${escHtml(spot.comment)}</i>`;
@@ -188,7 +194,7 @@ function crearSpotRow(spot) {
         <td><div class="dx">${flagImg}<span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign" title="${escHtml(t('qrz.title'))}" style="cursor:pointer;">${escHtml(spot.spotted)}</span><span class="country" title="${escHtml(country)}">${escHtml(country)}</span>${locator ? `<span class="locator" title="${escHtml(t('qsl.locatorTitle'))}">${escHtml(locator)}</span>` : ''}</div></td>
         <td><span class="mode-label mode-${escHtml(spot.mode)}">${escHtml(spot.mode)}</span></td>
         <td><span class="qsl-label ${hasLotw ? 'selected' : 'desactivado'}">LoTW</span><span class="qsl-label ${hasEqsl ? 'selected' : 'desactivado'}">eQSL</span><span class="qsl-label ${hasClublog ? 'selected' : 'desactivado'}" title="${escHtml(t('qsl.clublog'))}">CLog</span><span class="qsl-label oqrs ${hasOqrs ? 'selected' : 'desactivado'}" title="${escHtml(t('qsl.oqrs'))}">OQRS</span></td>
-        <td><span class="spotter">${escHtml(spot.spotter)}</span><span class="spotter-country">${escHtml(spot.cty?.spotter?.data?.Country || '')}</span></td>
+        <td title="${escHtml(spotterCountry)}"><span class="spotter">${escHtml(spot.spotter)}</span>${spotterFlag}<span class="spotter-country">${escHtml(spotterCountry)}</span></td>
         <td class="info" title="${escHtml(spot.comment)}">${info}</td>
     `;
 
