@@ -155,6 +155,9 @@ function inferMode(freq, comment, callsign) {
     if (/\bFT8\b/.test(text)) return "FT8";
     if (/\bFT4\b/.test(text)) return "FT4";
     if (/\b(RTTY|FSK)\b/.test(text)) return "RTTY";
+    if (/\bPSK(31|63|125)?\b/.test(text)) return "PSK31";
+    const digi = text.match(/\b(JT65|JT9|Q65|MSK144|JS8|OLIVIA|FST4W?|WSPR)\b/);
+    if (digi) return digi[1];
     
     // 3. Magic Frequencies (Standard and DXpedition)
     const isNear = (f1, f2) => Math.abs(f1 - f2) <= 0.003;
@@ -176,7 +179,8 @@ function normalizeMode(mode) {
     const text=(mode||"").toString().toUpperCase().trim();
     if (!text) return "UNK";
     if (text==="PHONE"||text==="USB"||text==="LSB") return "SSB";
-    const validModes=new Set(["CW", "SSB", "AM", "FM", "FT8", "FT4", "RTTY", "PSK31", "WSPR", "UNK"]);
+    // DIGI = digital segment of the band plan without a more specific mode
+    const validModes=new Set(["CW", "SSB", "AM", "FM", "FT8", "FT4", "RTTY", "PSK31", "WSPR", "JT65", "JT9", "Q65", "MSK144", "JS8", "OLIVIA", "FST4", "FST4W", "DIGI", "UNK"]);
     return validModes.has(text) ? text : "UNK";
 }
 
@@ -792,6 +796,7 @@ async function computeActivityDetail(minutes) {
             rbn: count('$rbn'),
             timeline: count(bucket),
             bandTime: count({ band: '$band', t: bucket }),
+            modeTime: count({ mode: '$mode', t: bucket }),
             bands: top('$band', 20),
             modes: top('$mode', 12),
             continents: count({ from: '$cty.spotter.data.Continent', to: '$cty.spotted.data.Continent' }),
@@ -821,6 +826,7 @@ async function computeActivityDetail(minutes) {
         manual: r.rbn.find(x => x._id !== true)?.count || 0,
         timeline: r.timeline.map(x => ({ t: x._id, count: x.count })).sort((a, b) => a.t - b.t),
         bandTime: r.bandTime.map(x => ({ band: x._id.band, t: x._id.t, count: x.count })),
+        modeTime: r.modeTime.map(x => ({ mode: x._id.mode, t: x._id.t, count: x.count })),
         bands: r.bands.map(x => ({ name: x._id, count: x.count })),
         modes: r.modes.map(x => ({ name: x._id, count: x.count })),
         continents: r.continents.filter(x => x._id.from && x._id.to).map(x => ({ from: x._id.from, to: x._id.to, count: x.count })),

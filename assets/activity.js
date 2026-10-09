@@ -224,6 +224,66 @@ function renderPaths(d) {
     });
 }
 
+// --- Contadores por modo ---
+// DIGI agrupa los digitales que no son FT8/FT4; OTHER, el resto (AM, FM, desconocidos)
+const MODE_GROUPS = [
+    { key: 'SSB', color: '#ff00ff', modes: ['SSB'] },
+    { key: 'CW', color: '#ffae00', modes: ['CW'] },
+    { key: 'FT8', color: '#00d4ff', modes: ['FT8'] },
+    { key: 'FT4', color: '#00e6a8', modes: ['FT4'] },
+    { key: 'DIGI', color: '#00ff7f', modes: ['DIGI', 'RTTY', 'PSK31', 'PSK', 'WSPR', 'JT65', 'JT9', 'Q65', 'MSK144', 'JS8', 'OLIVIA', 'FST4', 'FST4W'] },
+    { key: 'OTHER', color: '#8a93a8', modes: null }
+];
+const groupOf = (mode) => (MODE_GROUPS.find(g => g.modes && g.modes.includes(mode)) || MODE_GROUPS.at(-1)).key;
+
+function renderModeCounters(d) {
+    const xs = buckets(d);
+    const col = new Map(xs.map((x, i) => [x, i]));
+    const totals = Object.fromEntries(MODE_GROUPS.map(g => [g.key, 0]));
+    const series = Object.fromEntries(MODE_GROUPS.map(g => [g.key, new Array(xs.length).fill(0)]));
+    (d.modes || []).forEach(m => { totals[groupOf(m.name)] += m.count; });
+    (d.modeTime || []).forEach(m => {
+        const i = col.get(m.t);
+        if (i !== undefined) series[groupOf(m.mode)][i] += m.count;
+    });
+
+    $('mode-counters').innerHTML = MODE_GROUPS.map(g => {
+        const label = g.key === 'OTHER' ? t('av.mode.OTHER') : g.key;
+        const hint = g.key === 'DIGI' || g.key === 'OTHER' ? t(`av.modeHint.${g.key}`) : '';
+        return `<div class="mcard" style="--c:${g.color}" data-key="${g.key}" title="${esc(hint)}">
+            <span class="mcard-head"><i></i>${esc(label)}</span>
+            <span class="mcard-value">${fmtNum(totals[g.key])}</span>
+            <span class="mcard-sub">${esc(t('av.share', { pct: pct(totals[g.key], d.total) }))}</span>
+            ${hint ? `<span class="mcard-hint">${esc(hint)}</span>` : ''}
+            ${modeSpark(series[g.key], t('av.modeTrend', { mode: label }))}
+        </div>`;
+    }).join('');
+
+    $('mode-counters').querySelectorAll('.mcard svg').forEach(svg => {
+        const key = svg.closest('.mcard').dataset.key;
+        const vals = series[key];
+        svg.onmousemove = (evt) => {
+            const r = svg.getBoundingClientRect();
+            const i = Math.max(0, Math.min(vals.length - 1, Math.round((evt.clientX - r.left) / r.width * (vals.length - 1))));
+            showTip(evt, `<b>${hhmm(xs[i])}–${hhmm(xs[i] + d.bucketMinutes * 60000)} UTC</b><br>${fmtNum(vals[i])} spots`);
+        };
+        svg.onmouseleave = hideTip;
+    });
+}
+
+// Minigráfico de una serie (una por tarjeta, en el color del modo)
+function modeSpark(vals, label) {
+    if (vals.length < 2) return '';
+    const W = 100, H = 30, P = 2;
+    const max = Math.max(1, ...vals);
+    const x = (i) => (i / (vals.length - 1)) * W;
+    const y = (v) => H - P - (v / max) * (H - 2 * P);
+    const line = vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
+    return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">
+        <path class="spark-area" d="${line}L${W},${H}L0,${H}Z"/><path class="spark" d="${line}" vector-effect="non-scaling-stroke"/>
+    </svg>`;
+}
+
 // --- Mapa de calor mundial ---
 // Base: Natural Earth 1:110m (world.json), proyección equirectangular x = lon + 180, y = 90 - lat.
 // Se recorta a latitudes 85°N..60°S (sin Antártida), como el viewBox "0 5 360 145".
@@ -356,6 +416,7 @@ function renderLists(d) {
 function renderAll() {
     if (!data) return;
     renderKpis(data);
+    renderModeCounters(data);
     loadWorld().then(() => renderMap(data));
     renderTimeline(data);
     renderHeatmap(data);
