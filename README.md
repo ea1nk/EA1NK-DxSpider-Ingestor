@@ -50,8 +50,6 @@ Users, DX cluster sources and settings are stored in SQLite (`DATA_DIR/ingestor.
 
 ## Web views
 
-All pages are in Spanish by default, with an ES | EN switch in the header (or `?lang=en`). They share a `Powered by EA1NK - SCQ Devices` footer.
-
 ### `/` Live spots
 - Real-time spot table (one line per spot) with UTC time, frequency, DXCC entity and flag, station locator (Club Log), mode, LoTW/eQSL/Club Log (with OQRS), spotter and comment/SNR. Double-click a callsign to open QRZ.
 - Filter bar: bands, modes, source (RBN/manual), QSL (LoTW, eQSL, Club Log, OQRS, no online QSL) and watched callsigns; active filters shown as removable chips, remembered in the browser.
