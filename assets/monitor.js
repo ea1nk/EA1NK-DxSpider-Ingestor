@@ -12,13 +12,14 @@ const MODOS = [
     'CW', 'SSB', 'FT8', 'FT4', 'RTTY', 'PSK', 'DIGI'
 ];
 const TIPOS = ['RBN', 'TRAD'];
-const QSL_FILTERS = ['LoTW', 'eQSL', 'Club Log', 'OQRS'];
+// 'NONE' = estaciones que no usan ningún servicio; con todas marcadas no se filtra (como bandas y modos)
+const QSL_FILTERS = ['LoTW', 'eQSL', 'Club Log', 'OQRS', 'NONE'];
 
 let filtros = {
     bandas: [...BANDAS],
     modos: [...MODOS],
     tipos: [...TIPOS],
-    qsl: [],
+    qsl: [...QSL_FILTERS],
     indicativos: []
 };
 
@@ -30,9 +31,10 @@ function cargarFiltros() {
     if (data) {
         try {
             const loaded = JSON.parse(data);
-            const loadedQsl = Array.isArray(loaded.qsl)
+            // Lista vacía (formato anterior: "sin filtro") equivale a todas marcadas
+            const loadedQsl = Array.isArray(loaded.qsl) && loaded.qsl.length
                 ? loaded.qsl.filter((q) => QSL_FILTERS.includes(q))
-                : [];
+                : [...QSL_FILTERS];
             filtros = {
                 bandas: loaded.bandas || [...BANDAS],
                 modos: loaded.modos || [...MODOS],
@@ -98,20 +100,57 @@ function filtrarSpots() {
                 tipoMatch = !spot.rbn;
             }
         }
-        // Filtro LoTW/eQSL
+        // Filtro QSL: pasa si usa alguno de los servicios marcados, o si no usa ninguno y "Sin QSL" está marcado
         let qslMatch = true;
         const activeQsl = getNormalizedActiveQslFilters();
-        if (activeQsl.length > 0) {
-            // Basta con que cumpla uno de los servicios seleccionados
+        if (activeQsl.length > 0 && activeQsl.length < QSL_FILTERS.length) {
             const f = getSpotQslFlags(spot);
             const has = { 'LoTW': f.hasLotw, 'eQSL': f.hasEqsl, 'Club Log': f.hasClublog, 'OQRS': f.hasOqrs };
-            qslMatch = activeQsl.some(q => has[q]);
+            const services = Object.keys(has).filter(k => has[k]);
+            qslMatch = services.length ? services.some(q => activeQsl.includes(q)) : activeQsl.includes('NONE');
         }
         const callMatch = filtros.indicativos.length === 0 || filtros.indicativos.some(call => spot.spotted.toLowerCase().includes(call.toLowerCase()));
         return bandMatch && modeMatch && tipoMatch && qslMatch && callMatch;
     });
 }
 
+
+// --- Anchos de columna de la tabla de spots ---
+// Mínimos para que el contenido no se corte; el espacio sobrante se reparte entre DX, Spotter e Info.
+// Se calculan con el ancho disponible (no con el contenido), así las columnas no saltan con cada spot.
+const SPOT_COLUMNS = [
+    { cls: 'c-utc', min: 60 },
+    { cls: 'c-freq', min: 114 },
+    { cls: 'c-dx', min: 290 },
+    { cls: 'c-mode', min: 58 },
+    { cls: 'c-qsl', min: 184 },
+    { cls: 'c-spotter', min: 160 },
+    { cls: 'c-info', min: 140 }
+];
+// El espacio sobrante se da por turnos: DX hasta que quepa (bandera, indicativo, país y locator),
+// Spotter hasta que quepa su país, y el resto a Info y DX
+const SPOT_GROW = [['c-dx', 340], ['c-spotter', 200], ['c-dx', 420], ['c-info', Infinity]];
+
+function fitSpotColumns() {
+    const container = document.querySelector('.table-container');
+    const table = document.querySelector('.spots-table');
+    if (!container || !table) return;
+    const available = container.clientWidth;
+    const widths = Object.fromEntries(SPOT_COLUMNS.map(c => [c.cls, c.min]));
+    const minTotal = SPOT_COLUMNS.reduce((a, c) => a + c.min, 0);
+    let extra = Math.max(0, available - minTotal);
+    for (const [cls, max] of SPOT_GROW) {
+        const add = Math.min(extra, Math.max(0, max - widths[cls]));
+        widths[cls] += add;
+        extra -= add;
+    }
+    SPOT_COLUMNS.forEach(c => {
+        const col = table.querySelector(`col.${c.cls}`);
+        if (col) col.style.width = `${Math.floor(widths[c.cls])}px`;
+    });
+    // Si no caben los mínimos, la tabla se desplaza en horizontal en vez de recortar
+    table.style.width = `${Math.max(available, minTotal)}px`;
+}
 
 function renderSpots() {
     const spotList = document.getElementById('spot-list');
@@ -222,16 +261,18 @@ const CHIP_COLORS = {
     RBN: '#9aa0b4', TRAD: '#2196f3', LoTW: '#00ff7f', eQSL: '#00ff7f'
 };
 
-function crearChip(texto, activo, onClick, { dot = false, mono = false } = {}) {
+function crearChip(texto, activo, onClick, { dot = false, mono = false, label = texto } = {}) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'fchip' + (mono ? ' mono' : '');
     btn.style.setProperty('--c', CHIP_COLORS[texto] || 'var(--accent)');
     btn.setAttribute('aria-pressed', activo ? 'true' : 'false');
-    btn.innerHTML = `${dot ? '<i class="dot"></i>' : ''}${escHtml(texto)}`;
+    btn.innerHTML = `${dot ? '<i class="dot"></i>' : ''}${escHtml(label)}`;
     btn.onclick = onClick;
     return btn;
 }
+
+const qslLabel = (q) => q === 'NONE' ? t('f.noQsl') : q;
 
 // Una lista vacía o completa equivale a "sin filtro" en filtrarSpots()
 const restringe = (lista, total) => lista.length > 0 && lista.length < total;
@@ -276,7 +317,7 @@ function renderResumenFiltros() {
     if (restringe(filtros.bandas, BANDAS.length)) activos.push([t('f.bands'), lista(BANDAS.filter(b => filtros.bandas.includes(b))), () => { filtros.bandas = [...BANDAS]; }]);
     if (restringe(filtros.modos, MODOS.length)) activos.push([t('f.modes'), lista(MODOS.filter(m => filtros.modos.includes(m))), () => { filtros.modos = [...MODOS]; }]);
     if (filtros.tipos.length === 1) activos.push([t('f.origin'), t('f.only', { x: filtros.tipos[0] }), () => { filtros.tipos = [...TIPOS]; }]);
-    if (filtros.qsl.length) activos.push(['QSL', filtros.qsl.join(t('f.or')), () => { filtros.qsl = []; }]);
+    if (restringe(filtros.qsl, QSL_FILTERS.length)) activos.push(['QSL', QSL_FILTERS.filter(q => filtros.qsl.includes(q)).map(qslLabel).join(t('f.or')), () => { filtros.qsl = [...QSL_FILTERS]; }]);
     if (filtros.indicativos.length) activos.push([t('f.calls'), lista(filtros.indicativos, 3), () => { filtros.indicativos = []; }]);
 
     resumen.innerHTML = '';
@@ -323,12 +364,11 @@ function renderPanelFiltros() {
     }, { dot: true })));
 
     // QSL (LoTW, eQSL, Club Log, OQRS)
-    const qslGrupo = crearGrupo('QSL', filtros.qsl.length ? String(filtros.qsl.length) : '',
-        filtros.qsl.length ? [[t('f.removeAll'), () => { filtros.qsl = []; aplicarFiltros(); }]] : null);
+    const qslGrupo = crearGrupo('QSL', n(filtros.qsl, QSL_FILTERS.length), [[t('f.allF'), () => { filtros.qsl = [...QSL_FILTERS]; aplicarFiltros(); }]]);
     QSL_FILTERS.forEach(qsl => qslGrupo.body.appendChild(crearChip(qsl, filtros.qsl.includes(qsl), () => {
         filtros.qsl = toggleEn(filtros.qsl, qsl);
         aplicarFiltros();
-    })));
+    }, { label: qslLabel(qsl) })));
     const hint = document.createElement('p');
     hint.className = 'fhint';
     hint.textContent = t('f.qslHint');
@@ -392,7 +432,7 @@ function setupColapsable() {
     };
     toggle.onclick = () => { abierto = !abierto; aplicar(); };
     document.getElementById('filtros-reset').onclick = () => {
-        filtros = { bandas: [...BANDAS], modos: [...MODOS], tipos: [...TIPOS], qsl: [], indicativos: [] };
+        filtros = { bandas: [...BANDAS], modos: [...MODOS], tipos: [...TIPOS], qsl: [...QSL_FILTERS], indicativos: [] };
         aplicarFiltros();
     };
     aplicar();
@@ -400,6 +440,9 @@ function setupColapsable() {
 
 // --- Inicialización ---
 document.addEventListener('DOMContentLoaded', () => {
+    fitSpotColumns();
+    let fitTimer;
+    addEventListener('resize', () => { clearTimeout(fitTimer); fitTimer = setTimeout(fitSpotColumns, 100); });
     cargarFiltros();
     renderPanelFiltros();
     setupColapsable();

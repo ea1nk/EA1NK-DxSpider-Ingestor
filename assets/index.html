@@ -161,13 +161,8 @@
 
         /* --- Tabla compacta: una línea por spot --- */
         /* Anchos fijos: las columnas no cambian al llegar spots nuevos; el texto largo se recorta */
-        .spots-table { min-width: 940px; table-layout: fixed; }
-        .spots-table col.c-utc { width: 60px; }
-        .spots-table col.c-freq { width: 112px; }
-        .spots-table col.c-mode { width: 64px; }
-        .spots-table col.c-qsl { width: 196px; }
-        .spots-table col.c-spotter { width: 164px; }
-        .spots-table col.c-info { width: 140px; }
+        .spots-table { table-layout: fixed; }
+        /* Anchos fijados por monitor.js (fitSpotColumns) según el ancho disponible, no según el contenido */
         .spots-table td { padding: 3px 8px; font-size: 0.8rem; white-space: nowrap; height: 26px; overflow: hidden; text-overflow: ellipsis; }
         .spots-table th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .spots-table th { padding: 6px 8px; }
@@ -182,9 +177,10 @@
         .spots-table .dx { overflow: hidden; }
         .spots-table .dx > * { flex: none; }
         .spots-table .dx .country { flex: 0 1 auto; min-width: 0; font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* Si no cabe, se recorta antes el país que el locator */
+        .spots-table .dx .locator { flex: 0 0.2 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
         .spots-table .mode-label { font-size: 0.68rem !important; padding: 1px 6px !important; min-width: 34px !important; border-width: 1px; margin: 0; }
-        .spots-table .qsl-label { font-size: 0.62rem !important; padding: 0 5px !important; min-width: 0 !important; border-width: 1px; margin: 0 1px; }
-        .spots-table .qsl-label.oqrs.selected { color: #ffcf70; border-color: #ffae00; background: #ffae0018; }
+        .spots-table .qsl-label { font-size: 0.6rem !important; padding: 0 4px !important; min-width: 0 !important; border-width: 1px; margin: 0 1px; }
         .spots-table .locator { font-family: 'Cascadia Code', monospace; font-size: 0.66rem; color: #8a93a8; border: 1px solid #343849; border-radius: 3px; padding: 0 4px; flex: none; }
         .spots-table .spotter { font-weight: 700; }
         .spots-table .spotter-country { color: #666; font-size: 0.7rem; margin-left: 6px; }
@@ -288,7 +284,8 @@
         .scale.st-serious { border-left-color: var(--serious); }
         .scale.st-critical { border-left-color: var(--critical); }
 
-        .layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+        /* El panel lateral se estrecha en pantallas medianas para dejar sitio a la tabla */
+        .layout { display: grid; grid-template-columns: minmax(0, 1fr) clamp(290px, 21vw, 360px); gap: 16px; align-items: start; }
         .main-col { min-width: 0; }
         .side-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
         .card { background: var(--card); border-radius: 8px; padding: 12px 14px; }
@@ -485,8 +482,8 @@
         <span class="powered">Powered by <b>EA1NK - SCQ Devices</b></span>
     </footer>
 
-    <script src="i18n.js?v=20261009i"></script>
-    <script src="monitor.js?v=20261009c"></script>
+    <script src="i18n.js?v=20261009j"></script>
+    <script src="monitor.js?v=20261009e"></script>
     <script src="dashboard.js?v=20261009b"></script>
 </body>
 </html>
