@@ -285,14 +285,20 @@ function modeSpark(vals, label) {
 }
 
 // --- Mapa de calor mundial ---
-// Base: Natural Earth 1:110m (world.json), proyección equirectangular x = lon + 180, y = 90 - lat.
-// Se recorta a latitudes 85°N..60°S (sin Antártida), como el viewBox "0 5 360 145".
-const MAP_Y0 = 5, MAP_H = 145;
+// Base: Natural Earth 1:110m (world.json), proyección equirectangular X = lon + 180, Y = 90 - lat.
+// Vista inicial: latitudes 85°N..60°S (sin Antártida), viewBox "0 5 360 145".
+// Zoom con la rueda, doble clic o botones; arrastrar para mover.
+const MAP_HOME = { x: 0, y: 5, w: 360, h: 145 };
+const MAP_ASPECT = MAP_HOME.w / MAP_HOME.h;
+const MAP_MAX_ZOOM = 8;
 const HEAT_RAMP = [[29, 42, 64, 0], [36, 69, 107, 0.55], [47, 106, 166, 0.75], [77, 163, 255, 0.9], [169, 211, 255, 0.95], [235, 245, 255, 1]];
 let mapWho = 'spotted';
 try { mapWho = localStorage.getItem('dxactivity-map') === 'spotters' ? 'spotters' : 'spotted'; } catch (_) { /* ignore */ }
 let worldLoaded = null;
+let mapView = { ...MAP_HOME };
+let mapState = { pts: [], max: 1, total: 0 };
 let mapPoints = [];
+let mapFrame = null;
 
 function loadWorld() {
     if (!worldLoaded) {
@@ -313,7 +319,47 @@ function heatColor(a) {
     return c0.map((v, k) => v + (c1[k] - v) * f);
 }
 
+const mapZoom = () => MAP_HOME.w / mapView.w;
+
+// Mantiene la vista dentro del mapa y con la proporción del contenedor
+function clampView(v) {
+    const w = Math.max(MAP_HOME.w / MAP_MAX_ZOOM, Math.min(MAP_HOME.w, v.w));
+    const h = w / MAP_ASPECT;
+    return { w, h, x: Math.max(0, Math.min(360 - w, v.x)), y: Math.max(0, Math.min(180 - h, v.y)) };
+}
+
+function setView(v) {
+    mapView = clampView(v);
+    $('map-base').setAttribute('viewBox', `${mapView.x} ${mapView.y} ${mapView.w} ${mapView.h}`);
+    $('map').classList.toggle('zoomed', mapZoom() > 1.01);
+    $('map-zoom-level').textContent = `×${mapZoom().toFixed(1).replace(/\.0$/, '')}`;
+    // Agrupa redibujados seguidos (rueda, arrastre) en un fotograma
+    if (!mapFrame) mapFrame = requestAnimationFrame(() => { mapFrame = null; drawHeat(); });
+}
+
+// Zoom alrededor de un punto del contenedor (en píxeles)
+function zoomAt(factor, cx, cy) {
+    const wrap = $('map');
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    const mx = mapView.x + cx / W * mapView.w, my = mapView.y + cy / H * mapView.h;
+    const w = mapView.w / factor;
+    const v = clampView({ w, x: 0, y: 0 });
+    setView({ w: v.w, x: mx - cx / W * v.w, y: my - cy / H * v.h });
+}
+
 function renderMap(d) {
+    const pts = (d.map?.[mapWho] || []);
+    mapState = {
+        pts,
+        total: pts.reduce((a, p) => a + p.count, 0),
+        max: Math.max(1, ...pts.map(p => p.count))
+    };
+    $('map-note').textContent = t('av.mapNote', { n: fmtNum(pts.length) });
+    $('map-ramp').style.background = `linear-gradient(90deg, ${HEAT_RAMP.slice(1).map(c => `rgb(${c[0]},${c[1]},${c[2]})`).join(',')})`;
+    setView(mapView);
+}
+
+function drawHeat() {
     const wrap = $('map');
     const canvas = $('map-heat');
     const W = wrap.clientWidth, H = wrap.clientHeight;
@@ -323,26 +369,27 @@ function renderMap(d) {
     canvas.height = Math.round(H * dpr);
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    $('map-marker').hidden = true;
 
-    const pts = (d.map?.[mapWho] || []).filter(p => p.lat <= 90 - MAP_Y0 && p.lat >= 90 - MAP_Y0 - MAP_H);
-    const total = pts.reduce((a, p) => a + p.count, 0);
-    const max = Math.max(1, ...pts.map(p => p.count));
-    const px = (p) => [(p.lon + 180) / 360 * W, (90 - p.lat - MAP_Y0) / MAP_H * H];
-    mapPoints = pts.map(p => ({ ...p, xy: px(p) })).sort((a, b) => a.count - b.count);
-    $('map-note').textContent = t('av.mapNote', { n: fmtNum(pts.length) });
-    $('map-ramp').style.background = `linear-gradient(90deg, ${HEAT_RAMP.slice(1).map(c => `rgb(${c[0]},${c[1]},${c[2]})`).join(',')})`;
-    if (!pts.length) return;
+    const { pts, max } = mapState;
+    const v = mapView;
+    const project = (p) => [(p.lon + 180 - v.x) / v.w * W, (90 - p.lat - v.y) / v.h * H];
+    // Radio en píxeles: crece un poco con el zoom para que los focos se separen sin desaparecer
+    const baseR = Math.max(8, W / 70) * Math.min(2.2, Math.sqrt(mapZoom()));
+    mapPoints = pts.map(p => ({ ...p, xy: project(p) }))
+        .filter(p => p.xy[0] > -baseR * 2 && p.xy[0] < W + baseR * 2 && p.xy[1] > -baseR * 2 && p.xy[1] < H + baseR * 2)
+        .sort((a, b) => a.count - b.count);
+    if (!mapPoints.length) return;
 
     // 1) Intensidad en escala de grises (alfa acumulado), 2) coloreado con la rampa azul
     const off = document.createElement('canvas');
     off.width = canvas.width;
     off.height = canvas.height;
     const o = off.getContext('2d');
-    const baseR = Math.max(8, W / 70) * dpr;
     for (const p of mapPoints) {
         const w = Math.sqrt(p.count / max);
-        const r = baseR * (0.7 + 0.8 * w);
-        const [x, y] = p.xy.map(v => v * dpr);
+        const r = baseR * (0.7 + 0.8 * w) * dpr;
+        const x = p.xy[0] * dpr, y = p.xy[1] * dpr;
         const g = o.createRadialGradient(x, y, 0, x, y, r);
         g.addColorStop(0, `rgba(0,0,0,${Math.max(0.12, w)})`);
         g.addColorStop(1, 'rgba(0,0,0,0)');
@@ -358,26 +405,64 @@ function renderMap(d) {
         px4[i - 3] = r; px4[i - 2] = g; px4[i - 1] = b; px4[i] = Math.round(Math.min(1, alpha * (0.35 + a)) * 255);
     }
     ctx.putImageData(img, 0, 0);
+}
 
+function mapHover(evt) {
+    const canvas = $('map-heat');
+    const r = canvas.getBoundingClientRect();
+    const mx = evt.clientX - r.left, my = evt.clientY - r.top;
+    let best = null, bestD = 18 * 18;
+    for (const p of mapPoints) {
+        const dx = p.xy[0] - mx, dy = p.xy[1] - my, dd = dx * dx + dy * dy;
+        // A igual distancia gana el punto con más spots
+        if (dd < bestD || (best && dd === bestD && p.count > best.count)) { best = p; bestD = dd; }
+    }
+    const marker = $('map-marker');
+    if (!best) { marker.hidden = true; return hideTip(); }
+    marker.hidden = false;
+    marker.style.left = `${best.xy[0]}px`;
+    marker.style.top = `${best.xy[1]}px`;
+    showTip(evt, `<b>${esc(best.country || '')}</b>${best.prefix ? ` · ${esc(best.prefix)}` : ''}<br>${esc(t('av.mapTip', { n: fmtNum(best.count), pct: pct(best.count, mapState.total) }))}`);
+}
+
+function setupMapInteraction() {
+    const wrap = $('map');
+    const canvas = $('map-heat');
     canvas.setAttribute('role', 'img');
     canvas.setAttribute('aria-label', t('av.mapAria'));
-    canvas.onmousemove = (evt) => {
-        const r = canvas.getBoundingClientRect();
-        const mx = evt.clientX - r.left, my = evt.clientY - r.top;
-        let best = null, bestD = 18 * 18;
-        for (const p of mapPoints) {
-            const dx = p.xy[0] - mx, dy = p.xy[1] - my, dd = dx * dx + dy * dy;
-            // A igual distancia gana el punto con más spots
-            if (dd < bestD || (best && dd === bestD && p.count > best.count)) { best = p; bestD = dd; }
-        }
-        const marker = $('map-marker');
-        if (!best) { marker.hidden = true; return hideTip(); }
-        marker.hidden = false;
-        marker.style.left = `${best.xy[0]}px`;
-        marker.style.top = `${best.xy[1]}px`;
-        showTip(evt, `<b>${esc(best.country || '')}</b>${best.prefix ? ` · ${esc(best.prefix)}` : ''}<br>${esc(t('av.mapTip', { n: fmtNum(best.count), pct: pct(best.count, total) }))}`);
-    };
-    canvas.onmouseleave = () => { $('map-marker').hidden = true; hideTip(); };
+    const rel = (evt) => { const r = wrap.getBoundingClientRect(); return [evt.clientX - r.left, evt.clientY - r.top]; };
+
+    canvas.addEventListener('wheel', (evt) => {
+        evt.preventDefault();
+        const [cx, cy] = rel(evt);
+        zoomAt(evt.deltaY < 0 ? 1.25 : 0.8, cx, cy);
+    }, { passive: false });
+    canvas.addEventListener('dblclick', (evt) => { const [cx, cy] = rel(evt); zoomAt(2, cx, cy); });
+
+    // Arrastrar para mover (ratón y táctil)
+    let drag = null;
+    canvas.addEventListener('pointerdown', (evt) => {
+        if (mapZoom() <= 1.01) return;
+        drag = { x: evt.clientX, y: evt.clientY, view: { ...mapView } };
+        canvas.setPointerCapture(evt.pointerId);
+        wrap.classList.add('dragging');
+        hideTip();
+    });
+    canvas.addEventListener('pointermove', (evt) => {
+        if (!drag) return mapHover(evt);
+        const W = wrap.clientWidth, H = wrap.clientHeight;
+        setView({ ...drag.view, x: drag.view.x - (evt.clientX - drag.x) / W * drag.view.w, y: drag.view.y - (evt.clientY - drag.y) / H * drag.view.h });
+    });
+    const endDrag = () => { drag = null; wrap.classList.remove('dragging'); };
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
+    canvas.addEventListener('pointerleave', () => { if (!drag) { $('map-marker').hidden = true; hideTip(); } });
+
+    const center = () => [wrap.clientWidth / 2, wrap.clientHeight / 2];
+    $('map-zoom-in').onclick = () => zoomAt(1.6, ...center());
+    $('map-zoom-out').onclick = () => zoomAt(1 / 1.6, ...center());
+    $('map-zoom-reset').onclick = () => setView({ ...MAP_HOME });
+    ['map-zoom-in', 'map-zoom-out', 'map-zoom-reset'].forEach(id => { $(id).title = t(`av.${id.replace('map-zoom-', 'zoom.')}`); $(id).setAttribute('aria-label', $(id).title); });
 }
 
 function setMapWho(who) {
@@ -460,6 +545,7 @@ document.addEventListener('DOMContentLoaded', () => {
     $('window-switch').setAttribute('aria-label', t('av.window'));
     document.querySelectorAll('#window-switch button').forEach(b => { b.onclick = () => setWindow(+b.dataset.min); });
     document.querySelectorAll('#map-switch button').forEach(b => { b.onclick = () => setMapWho(b.dataset.who); });
+    setupMapInteraction();
     setMapWho(mapWho);
     setWindow(minutes);
     setInterval(load, REFRESH_MS);

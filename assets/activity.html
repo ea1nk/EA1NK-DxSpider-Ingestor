@@ -78,8 +78,17 @@
         /* Mode counters */
         .section-title { margin: 0 0 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); font-weight: 600; }
         /* Mapa y contadores por modo lado a lado; se apilan en pantallas estrechas */
-        .map-row { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 12px; align-items: stretch; }
+        .map-row { display: grid; grid-template-columns: 210px minmax(0, 1fr) 360px; gap: 12px; align-items: stretch; }
         .map-row > .card { min-width: 0; }
+        /* Indicadores en columna a la izquierda del mapa */
+        .map-row .kpis { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+        .map-row .kpi { flex: 1; padding: 8px 12px; justify-content: center; gap: 1px; }
+        .map-row .kpi-value { font-size: 1.4rem; }
+        .map-row .kpi-sub { font-size: 0.68rem; }
+        @media (max-width: 1280px) {
+            .map-row { grid-template-columns: minmax(0, 1fr) 360px; }
+            .map-row .kpis { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+        }
         .mode-counters { display: flex; flex-direction: column; min-width: 0; }
         .mcards { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; gap: 10px; flex: 1; }
         @media (max-width: 1100px) {
@@ -102,7 +111,14 @@
         .map-base .land { fill: #232a3a; }
         .map-base .borders { fill: none; stroke: #343c51; stroke-width: 0.6; vector-effect: non-scaling-stroke; }
         .map-base .graticule { fill: none; stroke: #1b2130; stroke-width: 1; vector-effect: non-scaling-stroke; }
-        .map-heat { cursor: crosshair; }
+        .map-heat { cursor: crosshair; touch-action: none; }
+        .map-wrap.zoomed .map-heat { cursor: grab; }
+        .map-wrap.dragging .map-heat { cursor: grabbing; }
+        .map-controls { position: absolute; top: 8px; left: 8px; display: flex; flex-direction: column; gap: 4px; align-items: center; }
+        .map-controls button { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: #1a1f2bcc; color: #e1e1e6; font-size: 1rem; line-height: 1; cursor: pointer; }
+        .map-controls button:hover { border-color: #4a4f63; background: #242a38; }
+        .map-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+        .map-zoom-level { font-size: 0.62rem; color: var(--muted); background: #1a1f2bcc; border-radius: 4px; padding: 1px 4px; }
         .map-marker { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2px solid #fff; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 2px #0008; }
         .map-note { margin-left: auto; }
         .card h2 .seg button { font-size: 0.7rem; padding: 4px 9px; text-transform: none; letter-spacing: 0; }
@@ -188,17 +204,17 @@
     <div class="meta loading" id="meta"><span class="dot"></span><span id="meta-text" data-i18n="av.loading">Calculando actividad…</span></div>
     <div class="banner" id="error" data-i18n="av.error" hidden></div>
 
-    <div class="kpis">
-        <div class="kpi"><span class="kpi-label" data-i18n="av.kpi.spots">Spots</span><span class="kpi-value" id="k-spots">—</span><span class="kpi-sub" id="k-spots-sub"></span></div>
-        <div class="kpi"><span class="kpi-label" data-i18n="av.kpi.calls">Indicativos únicos</span><span class="kpi-value" id="k-calls">—</span><span class="kpi-sub" data-i18n="av.kpi.callsSub"></span></div>
-        <div class="kpi"><span class="kpi-label" data-i18n="av.kpi.dxcc">Entidades DXCC</span><span class="kpi-value" id="k-dxcc">—</span><span class="kpi-sub" data-i18n="av.kpi.dxccSub"></span></div>
-        <div class="kpi"><span class="kpi-label" data-i18n="av.kpi.spotters">Spotters</span><span class="kpi-value" id="k-spotters">—</span><span class="kpi-sub" data-i18n="av.kpi.spottersSub"></span></div>
-        <div class="kpi"><span class="kpi-label" data-i18n="av.kpi.rbn">RBN / manual</span><span class="kpi-value" id="k-rbn">—</span><span class="kpi-sub" id="k-rbn-sub"></span><div class="split" id="k-rbn-split"><i class="a"></i><i class="b"></i></div></div>
-        <div class="kpi"><span class="kpi-label" data-i18n="av.kpi.topBand">Banda más activa</span><span class="kpi-value" id="k-band">—</span><span class="kpi-sub" id="k-band-sub"></span></div>
-    </div>
-
     <div class="stack">
         <div class="map-row">
+            <div class="kpis">
+                <div class="kpi"><span class="kpi-label" data-i18n="av.kpi.spots">Spots</span><span class="kpi-value" id="k-spots">—</span><span class="kpi-sub" id="k-spots-sub"></span></div>
+                <div class="kpi"><span class="kpi-label" data-i18n="av.kpi.calls">Indicativos únicos</span><span class="kpi-value" id="k-calls">—</span><span class="kpi-sub" data-i18n="av.kpi.callsSub"></span></div>
+                <div class="kpi"><span class="kpi-label" data-i18n="av.kpi.dxcc">Entidades DXCC</span><span class="kpi-value" id="k-dxcc">—</span><span class="kpi-sub" data-i18n="av.kpi.dxccSub"></span></div>
+                <div class="kpi"><span class="kpi-label" data-i18n="av.kpi.spotters">Spotters</span><span class="kpi-value" id="k-spotters">—</span><span class="kpi-sub" data-i18n="av.kpi.spottersSub"></span></div>
+                <div class="kpi"><span class="kpi-label" data-i18n="av.kpi.rbn">RBN / manual</span><span class="kpi-value" id="k-rbn">—</span><span class="kpi-sub" id="k-rbn-sub"></span><div class="split" id="k-rbn-split"><i class="a"></i><i class="b"></i></div></div>
+                <div class="kpi"><span class="kpi-label" data-i18n="av.kpi.topBand">Banda más activa</span><span class="kpi-value" id="k-band">—</span><span class="kpi-sub" id="k-band-sub"></span></div>
+            </div>
+
             <section class="card">
                 <h2><span data-i18n="av.map">Mapa de calor mundial</span>
                     <span class="seg" id="map-switch" role="group">
@@ -210,8 +226,14 @@
                     <svg class="map-base" id="map-base" viewBox="0 5 360 145" preserveAspectRatio="none" aria-hidden="true"></svg>
                     <canvas class="map-heat" id="map-heat"></canvas>
                     <div class="map-marker" id="map-marker" hidden></div>
+                    <div class="map-controls">
+                        <button type="button" id="map-zoom-in">+</button>
+                        <button type="button" id="map-zoom-out">−</button>
+                        <button type="button" id="map-zoom-reset">⟲</button>
+                        <span id="map-zoom-level" class="map-zoom-level">×1</span>
+                    </div>
                 </div>
-                <div class="legend"><span data-i18n="av.legendLess">menos</span><span class="ramp" id="map-ramp"></span><span data-i18n="av.legendMore">más</span><span class="map-note" id="map-note"></span></div>
+                <div class="legend"><span data-i18n="av.legendLess">menos</span><span class="ramp" id="map-ramp"></span><span data-i18n="av.legendMore">más</span><span class="map-note"><span id="map-note"></span> · <span data-i18n="av.zoom.hint">rueda o doble clic para acercar, arrastra para mover</span></span></div>
             </section>
 
             <section class="mode-counters" aria-labelledby="mode-counters-title">
@@ -255,7 +277,7 @@
 
     <footer class="site-footer">Powered by <b>EA1NK - SCQ Devices</b></footer>
 
-    <script src="/i18n.js?v=20261009e"></script>
-    <script src="/activity.js?v=20261009d"></script>
+    <script src="/i18n.js?v=20261009f"></script>
+    <script src="/activity.js?v=20261009e"></script>
 </body>
 </html>
