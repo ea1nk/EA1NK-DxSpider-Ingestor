@@ -51,8 +51,6 @@ Los usuarios, los orígenes de spots y los ajustes se guardan en SQLite (`DATA_D
 
 ## Vistas web
 
-Todas las páginas están en castellano por defecto, con un selector ES | EN en la cabecera (o `?lang=en`). Comparten el pie `Powered by EA1NK - SCQ Devices`.
-
 ### `/` Spots en directo
 - Tabla de spots en tiempo real (una línea por spot) con hora UTC, frecuencia, entidad DXCC con bandera, locator de la estación (Club Log), modo, LoTW/eQSL/Club Log (con OQRS), spotter y comentario/SNR. Doble clic en un indicativo abre QRZ.
 - Barra de filtros: bandas, modos, origen (RBN/manual), QSL (LoTW, eQSL, Club Log, OQRS, sin QSL online) e indicativos vigilados; los filtros activos aparecen como chips eliminables y se recuerdan en el navegador.
