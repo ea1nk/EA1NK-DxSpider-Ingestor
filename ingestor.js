@@ -815,6 +815,32 @@ async function computeActivityDetail(minutes) {
             calls: top('$spotted', 15, { country: { $first: '$cty.spotted.data.Country' }, adif: { $first: '$cty.spotted.data.ADIF' }, bands: { $addToSet: '$band' } }),
             spotters: top('$spotter', 10, { country: { $first: '$cty.spotter.data.Country' }, adif: { $first: '$cty.spotter.data.ADIF' } }),
             sources: top('$source', 20),
+            // QSL services of the spotted stations: unique stations and spots per service
+            qslCalls: [
+                { $group: {
+                    _id: '$spotted',
+                    lotw: { $max: { $cond: ['$cty.spotted.lotw', 1, 0] } },
+                    eqsl: { $max: { $cond: ['$cty.spotted.eqsl', 1, 0] } },
+                    clublog: { $max: { $cond: ['$cty.spotted.clublog', 1, 0] } },
+                    oqrs: { $max: { $cond: ['$cty.spotted.oqrs', 1, 0] } }
+                } },
+                { $group: {
+                    _id: null,
+                    calls: { $sum: 1 },
+                    lotw: { $sum: '$lotw' }, eqsl: { $sum: '$eqsl' }, clublog: { $sum: '$clublog' }, oqrs: { $sum: '$oqrs' },
+                    none: { $sum: { $cond: [{ $eq: [{ $add: ['$lotw', '$eqsl', '$clublog', '$oqrs'] }, 0] }, 1, 0] } }
+                } }
+            ],
+            qslSpots: [
+                { $group: {
+                    _id: null,
+                    lotw: { $sum: { $cond: ['$cty.spotted.lotw', 1, 0] } },
+                    eqsl: { $sum: { $cond: ['$cty.spotted.eqsl', 1, 0] } },
+                    clublog: { $sum: { $cond: ['$cty.spotted.clublog', 1, 0] } },
+                    oqrs: { $sum: { $cond: ['$cty.spotted.oqrs', 1, 0] } },
+                    none: { $sum: { $cond: [{ $or: ['$cty.spotted.lotw', '$cty.spotted.eqsl', '$cty.spotted.clublog', '$cty.spotted.oqrs'] }, 0, 1] } }
+                } }
+            ],
             mapSpotted: points('spotted'),
             mapSpotters: points('spotter')
         } }
@@ -844,7 +870,11 @@ async function computeActivityDetail(minutes) {
         calls: r.calls.map(x => ({ name: x._id, count: x.count, country: x.country, adif: x.adif, bands: x.bands })),
         spotters: r.spotters.map(x => ({ name: x._id, count: x.count, country: x.country, adif: x.adif })),
         sources: r.sources.map(x => ({ name: x._id, count: x.count })),
-        map: { spotted: toPoints(r.mapSpotted), spotters: toPoints(r.mapSpotters) }
+        map: { spotted: toPoints(r.mapSpotted), spotters: toPoints(r.mapSpotters) },
+        qsl: (() => {
+            const c=r.qslCalls[0] || {}, sp=r.qslSpots[0] || {};
+            return Object.fromEntries(['lotw', 'eqsl', 'clublog', 'oqrs', 'none'].map(k => [k, { calls: c[k] || 0, spots: sp[k] || 0 }]));
+        })()
     };
     activityDetailCache.set(minutes, { at: Date.now(), data });
     return data;

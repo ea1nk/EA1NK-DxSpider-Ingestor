@@ -284,6 +284,27 @@ function modeSpark(vals, label) {
     </svg>`;
 }
 
+// --- Servicios QSL de las estaciones DX ---
+const QSL_SERVICES = [['lotw', 'LoTW'], ['eqsl', 'eQSL'], ['clublog', 'Club Log'], ['oqrs', 'OQRS'], ['none', null]];
+
+function renderQslStats(d) {
+    const q = d.qsl;
+    const el = $('qsl-stats');
+    if (!q) { el.innerHTML = ''; return; }
+    const calls = d.uniqueCalls || 0;
+    el.innerHTML = QSL_SERVICES.map(([key, name]) => {
+        const v = q[key] || { calls: 0, spots: 0 };
+        const p = pct(v.calls, calls);
+        return `<div class="qcard${key === 'none' ? ' none' : ''}" title="${esc(t('av.qslSpots', { n: fmtNum(v.spots), pct: pct(v.spots, d.total) }))}">
+            <span class="qcard-label">${esc(name || t('f.noQsl'))}</span>
+            <span class="qcard-value">${p.toLocaleString(LOCALE, { maximumFractionDigits: 1 })}%</span>
+            <span class="meter"><i style="width:${Math.min(100, p)}%"></i></span>
+            <span class="qcard-sub">${esc(t('av.qslStations', { n: fmtNum(v.calls), total: fmtNum(calls) }))}</span>
+            <span class="qcard-sub">${esc(t('av.qslSpots', { n: fmtNum(v.spots), pct: pct(v.spots, d.total) }))}</span>
+        </div>`;
+    }).join('');
+}
+
 // --- Mapa de calor mundial ---
 // Base: Natural Earth 1:110m (world.json), proyección equirectangular X = lon + 180, Y = 90 - lat.
 // Vista inicial: latitudes 85°N..60°S (sin Antártida), viewBox "0 5 360 145".
@@ -502,6 +523,7 @@ function renderAll() {
     if (!data) return;
     renderKpis(data);
     renderModeCounters(data);
+    renderQslStats(data);
     loadWorld().then(() => renderMap(data));
     renderTimeline(data);
     renderHeatmap(data);
