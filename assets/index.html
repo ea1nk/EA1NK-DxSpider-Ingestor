@@ -160,8 +160,16 @@
         [hidden] { display: none !important; }
 
         /* --- Tabla compacta: una línea por spot --- */
-        .spots-table { min-width: 760px; }
-        .spots-table td { padding: 3px 8px; font-size: 0.8rem; white-space: nowrap; height: 26px; }
+        /* Anchos fijos: las columnas no cambian al llegar spots nuevos; el texto largo se recorta */
+        .spots-table { min-width: 940px; table-layout: fixed; }
+        .spots-table col.c-utc { width: 60px; }
+        .spots-table col.c-freq { width: 112px; }
+        .spots-table col.c-mode { width: 64px; }
+        .spots-table col.c-qsl { width: 196px; }
+        .spots-table col.c-spotter { width: 164px; }
+        .spots-table col.c-info { width: 140px; }
+        .spots-table td { padding: 3px 8px; font-size: 0.8rem; white-space: nowrap; height: 26px; overflow: hidden; text-overflow: ellipsis; }
+        .spots-table th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .spots-table th { padding: 6px 8px; }
         .spots-table tbody tr:hover { background: #ffffff06; }
         .spots-table .freq { font-size: 0.88rem; }
@@ -171,14 +179,16 @@
         .spots-table .flag-empty { width: 22px; flex: none; }
         .spots-table .badge { margin-right: 0; font-size: 0.55rem; padding: 1px 4px; }
         .spots-table .callsign { font-size: 0.92rem; }
-        .spots-table .country { font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; max-width: 170px; }
+        .spots-table .dx { overflow: hidden; }
+        .spots-table .dx > * { flex: none; }
+        .spots-table .dx .country { flex: 0 1 auto; min-width: 0; font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .spots-table .mode-label { font-size: 0.68rem !important; padding: 1px 6px !important; min-width: 34px !important; border-width: 1px; margin: 0; }
         .spots-table .qsl-label { font-size: 0.62rem !important; padding: 0 5px !important; min-width: 0 !important; border-width: 1px; margin: 0 1px; }
-        .spots-table .qsl-label .oqrs { font-size: 0.5rem; margin-left: 3px; color: #ffcf70; vertical-align: super; letter-spacing: 0.3px; }
+        .spots-table .qsl-label.oqrs.selected { color: #ffcf70; border-color: #ffae00; background: #ffae0018; }
         .spots-table .locator { font-family: 'Cascadia Code', monospace; font-size: 0.66rem; color: #8a93a8; border: 1px solid #343849; border-radius: 3px; padding: 0 4px; flex: none; }
         .spots-table .spotter { font-weight: 700; }
         .spots-table .spotter-country { color: #666; font-size: 0.7rem; margin-left: 6px; }
-        .spots-table .info { color: #ccc; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
+        .spots-table .info { color: #ccc; }
         .spots-table .snr { color: var(--accent); font-weight: 700; }
 
         .nav-link { color: #aab0c4; text-decoration: none; font-size: 0.82rem; font-weight: 600; padding: 6px 10px; border-radius: 6px; border: 1px solid #343849; background: #1f2230; }
@@ -414,6 +424,7 @@
 
     <div class="table-container">
         <table class="spots-table">
+            <colgroup><col class="c-utc"><col class="c-freq"><col class="c-dx"><col class="c-mode"><col class="c-qsl"><col class="c-spotter"><col class="c-info"></colgroup>
             <thead>
                 <tr>
                     <th>UTC</th>
@@ -474,8 +485,8 @@
         <span class="powered">Powered by <b>EA1NK - SCQ Devices</b></span>
     </footer>
 
-    <script src="i18n.js?v=20261009g"></script>
-    <script src="monitor.js?v=20261009"></script>
+    <script src="i18n.js?v=20261009i"></script>
+    <script src="monitor.js?v=20261009c"></script>
     <script src="dashboard.js?v=20261009b"></script>
 </body>
 </html>

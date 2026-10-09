@@ -148,7 +148,7 @@ function crearSpotRow(spot) {
         <td><span class="freq">${spot.freq.toFixed(1)}</span><span class="band">${escHtml(spot.band)}</span></td>
         <td><div class="dx">${flagImg}<span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign" title="${escHtml(t('qrz.title'))}" style="cursor:pointer;">${escHtml(spot.spotted)}</span><span class="country" title="${escHtml(country)}">${escHtml(country)}</span>${locator ? `<span class="locator" title="${escHtml(t('qsl.locatorTitle'))}">${escHtml(locator)}</span>` : ''}</div></td>
         <td><span class="mode-label mode-${escHtml(spot.mode)}">${escHtml(spot.mode)}</span></td>
-        <td><span class="qsl-label ${hasLotw ? 'selected' : 'desactivado'}">LoTW</span><span class="qsl-label ${hasEqsl ? 'selected' : 'desactivado'}">eQSL</span><span class="qsl-label ${hasClublog ? 'selected' : 'desactivado'}" title="${escHtml(t(hasOqrs ? 'qsl.clublogOqrs' : 'qsl.clublog'))}">CLog${hasOqrs ? '<sup class="oqrs">OQRS</sup>' : ''}</span></td>
+        <td><span class="qsl-label ${hasLotw ? 'selected' : 'desactivado'}">LoTW</span><span class="qsl-label ${hasEqsl ? 'selected' : 'desactivado'}">eQSL</span><span class="qsl-label ${hasClublog ? 'selected' : 'desactivado'}" title="${escHtml(t('qsl.clublog'))}">CLog</span><span class="qsl-label oqrs ${hasOqrs ? 'selected' : 'desactivado'}" title="${escHtml(t('qsl.oqrs'))}">OQRS</span></td>
         <td><span class="spotter">${escHtml(spot.spotter)}</span><span class="spotter-country">${escHtml(spot.cty?.spotter?.data?.Country || '')}</span></td>
         <td class="info" title="${escHtml(spot.comment)}">${info}</td>
     `;
@@ -315,23 +315,24 @@ function renderPanelFiltros() {
         aplicarFiltros();
     }, { dot: true })));
 
-    // Origen y QSL
-    const origen = crearGrupo(t('f.originQsl'));
+    // Origen (RBN / manual)
+    const origen = crearGrupo(t('f.origin'), n(filtros.tipos, TIPOS.length));
     TIPOS.forEach(tipo => origen.body.appendChild(crearChip(tipo, filtros.tipos.includes(tipo), () => {
         filtros.tipos = toggleEn(filtros.tipos, tipo);
         aplicarFiltros();
     }, { dot: true })));
-    const sep = document.createElement('span');
-    sep.className = 'fsep';
-    origen.body.appendChild(sep);
-    QSL_FILTERS.forEach(qsl => origen.body.appendChild(crearChip(qsl, filtros.qsl.includes(qsl), () => {
+
+    // QSL (LoTW, eQSL, Club Log, OQRS)
+    const qslGrupo = crearGrupo('QSL', filtros.qsl.length ? String(filtros.qsl.length) : '',
+        filtros.qsl.length ? [[t('f.removeAll'), () => { filtros.qsl = []; aplicarFiltros(); }]] : null);
+    QSL_FILTERS.forEach(qsl => qslGrupo.body.appendChild(crearChip(qsl, filtros.qsl.includes(qsl), () => {
         filtros.qsl = toggleEn(filtros.qsl, qsl);
         aplicarFiltros();
     })));
     const hint = document.createElement('p');
     hint.className = 'fhint';
     hint.textContent = t('f.qslHint');
-    origen.body.appendChild(hint);
+    qslGrupo.body.appendChild(hint);
 
     // Indicativos monitorizados
     const calls = crearGrupo(t('f.calls'), filtros.indicativos.length ? String(filtros.indicativos.length) : '',
@@ -373,7 +374,7 @@ function renderPanelFiltros() {
         calls.body.appendChild(chip);
     });
 
-    panel.append(bandas.group, modos.group, origen.group, calls.group);
+    panel.append(bandas.group, modos.group, origen.group, qslGrupo.group, calls.group);
 }
 
 // --- Panel desplegable (recuerda si estaba abierto) ---
