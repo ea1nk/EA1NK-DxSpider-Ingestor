@@ -27,6 +27,18 @@ Servicio Node.js que ingiere spots DX de uno o varios clusters, los enriquece co
 - Una API REST (histórico, actividad, meteorología espacial) y un WebSocket en tiempo real
 - Interfaz en castellano e inglés
 
+## Interfaz web
+
+Además de la API, el servicio incluye una interfaz web completa en el puerto `3000`; no hace falta instalar nada más, basta con abrirla en el navegador:
+
+| URL | Vista |
+|---|---|
+| `http://<host>:3000/` | Spots en directo con propagación y meteorología espacial |
+| `http://<host>:3000/activity` | Estadísticas de actividad con mapa de calor mundial |
+| `http://<host>:3000/admin` | Administración (requiere login) |
+
+![Spots en directo](docs/screenshots/main.webp)
+
 ## Flujo de funcionamiento
 
 1. Se conecta por telnet a uno o varios clusters DX (orígenes gestionados desde `/admin`, cada uno con sus nodos de respaldo).
@@ -43,19 +55,27 @@ Todas las páginas están en castellano por defecto, con un selector ES | EN en 
 
 ### `/` Spots en directo
 - Tabla de spots en tiempo real (una línea por spot) con hora UTC, frecuencia, entidad DXCC con bandera, locator de la estación (Club Log), modo, LoTW/eQSL/Club Log (con OQRS), spotter y comentario/SNR. Doble clic en un indicativo abre QRZ.
-- Barra de filtros: bandas, modos, RBN/manual, LoTW/eQSL/Club Log/OQRS e indicativos vigilados; los filtros activos aparecen como chips eliminables y se recuerdan en el navegador.
+- Barra de filtros: bandas, modos, origen (RBN/manual), QSL (LoTW, eQSL, Club Log, OQRS, sin QSL online) e indicativos vigilados; los filtros activos aparecen como chips eliminables y se recuerdan en el navegador.
 - Meteorología espacial: SFI y SSN (tendencia de 30 días), índices A y K, clase de rayos X, viento solar, Bz, ruido HF y escalas NOAA R/S/G.
 - Panel lateral: condiciones HF de día y de noche, actividad por banda y entidades/indicativos más activos (última hora), Kp (3 días + previsión NOAA), rayos X GOES (6 h), condiciones VHF e imagen del Sol en directo (NASA SDO).
 - Relojes UTC y local y estado de la conexión al cluster. Reconecta sola y recupera los spots recientes tras un corte.
 
+<p align="center"><img src="docs/screenshots/mobile.webp" alt="Spots en directo en un móvil" width="260"></p>
+
 ### `/activity` Estadísticas de actividad
 Selector de periodo (15 min, 1 h, 6 h, 24 h), actualizado cada minuto:
 - Indicadores: spots y spots/min, indicativos únicos, entidades DXCC, spotters, RBN frente a manuales y banda más activa.
-- **Mapa de calor mundial** de la densidad de spots, alternando entre estaciones DX y spotters. Las posiciones son aproximadas: coordenadas CTY de la entidad o del área del prefijo (por ejemplo, `K9` y `K` son puntos distintos).
+- **Mapa de calor mundial** de la densidad de spots, alternando entre estaciones DX y spotters, con zoom (rueda, doble clic o +/−) y arrastre para moverse. Las posiciones usan el locator de la estación de Club Log cuando existe y, si no, las coordenadas CTY de la entidad o del área del prefijo.
+- **Spots por modo**: SSB, CW, FT8, FT4, DIGI (resto de digitales, sin FT8/FT4) y OTROS, con su evolución.
+- **Servicios QSL de las estaciones DX**: porcentaje de estaciones únicas que usan LoTW, eQSL, Club Log y OQRS, y de las que no usan QSL online.
 - Spots en el tiempo, mapa de calor banda × hora (con vista en tabla), bandas y modos, rutas entre continentes (quién escucha a quién), entidades DXCC e indicativos más spoteados, spotters más activos y spots por origen cuando hay varios.
+
+![Estadísticas de actividad](docs/screenshots/activity.webp)
 
 ### `/admin` Administración
 Ver más abajo.
+
+![Administración](docs/screenshots/admin.webp)
 
 ### Páginas de error
 Los navegadores reciben páginas 404/500 con estilo; los clientes de la API reciben JSON.

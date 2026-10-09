@@ -26,6 +26,18 @@ Node.js service that ingests DX spots from one or more DX clusters, enriches the
 - A REST API (history, activity, space weather) and a WebSocket stream for real-time spots
 - Spanish and English interface
 
+## Web interface
+
+Besides the API, the service includes a complete web interface served on port `3000` — no extra software needed, just open it in a browser:
+
+| URL | View |
+|---|---|
+| `http://<host>:3000/` | Live spots with propagation and space weather |
+| `http://<host>:3000/activity` | Activity statistics with world heatmap |
+| `http://<host>:3000/admin` | Administration (login required) |
+
+![Live spots](docs/screenshots/main.webp)
+
 ## Runtime overview
 
 1. Connects to one or more DX clusters via telnet (sources managed from `/admin`, each with its own backup nodes).
@@ -42,19 +54,27 @@ All pages are in Spanish by default, with an ES | EN switch in the header (or `?
 
 ### `/` Live spots
 - Real-time spot table (one line per spot) with UTC time, frequency, DXCC entity and flag, station locator (Club Log), mode, LoTW/eQSL/Club Log (with OQRS), spotter and comment/SNR. Double-click a callsign to open QRZ.
-- Filter bar: bands, modes, RBN/manual, LoTW/eQSL/Club Log/OQRS and watched callsigns; active filters shown as removable chips, remembered in the browser.
+- Filter bar: bands, modes, source (RBN/manual), QSL (LoTW, eQSL, Club Log, OQRS, no online QSL) and watched callsigns; active filters shown as removable chips, remembered in the browser.
 - Space weather: SFI and SSN (30-day trend), A and K indices, X-ray class, solar wind, Bz, HF noise and NOAA R/S/G scales.
 - Side panel: HF band conditions day/night, band activity and most active entities/callsigns (last hour), Kp (3 days + NOAA forecast), GOES X-ray (6 h), VHF conditions and a live image of the Sun (NASA SDO).
 - UTC/local clocks and DX cluster connection status. Reconnects automatically and recovers recent spots after a disconnection.
 
+<p align="center"><img src="docs/screenshots/mobile.webp" alt="Live spots on a phone" width="260"></p>
+
 ### `/activity` Activity statistics
 Period selector (15 min, 1 h, 6 h, 24 h), refreshed every minute:
 - KPIs: spots and spots/min, unique callsigns, DXCC entities, spotters, RBN vs manual, busiest band.
-- **World heatmap** of spot density, switchable between DX stations and spotters. Positions are approximate: CTY coordinates of the entity or prefix area (e.g. `K9` and `K` are different points).
+- **World heatmap** of spot density, switchable between DX stations and spotters, with zoom (wheel, double-click or +/−) and drag to pan. Positions use the station locator from Club Log when known, otherwise the CTY coordinates of the entity or prefix area.
+- **Spots by mode**: SSB, CW, FT8, FT4, DIGI (other digital modes, excluding FT8/FT4) and OTHER, with a trend sparkline.
+- **QSL services of DX stations**: share of unique stations using LoTW, eQSL, Club Log and OQRS, and those with no online QSL.
 - Spots over time, band × time heatmap (with table view), bands and modes, continent-to-continent paths (who hears whom), most spotted DXCC entities and callsigns, most active spotters, and spots per source when there are several.
+
+![Activity statistics](docs/screenshots/activity.webp)
 
 ### `/admin` Administration
 See below.
+
+![Administration](docs/screenshots/admin.webp)
 
 ### Error pages
 Browsers get styled 404/500 pages; API clients get JSON.
