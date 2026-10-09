@@ -30,6 +30,7 @@ coverage/
 
 # Local persistent data
 mongo_data/
+data/
 
 # Secrets and credentials
 *.pem

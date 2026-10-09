@@ -29,6 +29,11 @@ services:
         max-file: "3"
     env_file:
       - .env
+    environment:
+      - DATA_DIR=/data
+    volumes:
+      # SQLite database with users and DX cluster sources
+      - ./data:/data
     healthcheck:
       # /health returns 503 when the DX cluster has been down longer than HEALTH_GRACE_MS
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/health"]

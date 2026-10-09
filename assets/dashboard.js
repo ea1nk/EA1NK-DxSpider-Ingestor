@@ -374,10 +374,18 @@ function nodeName(name) {
 function renderHealth(h) {
     const el = $('cluster-status');
     const c = h.dxCluster || {};
+    const list = h.sources || [];
     el.className = `pill ${c.connected ? 'online' : 'offline'}`;
+    if (list.length > 1) {
+        // Varios orígenes simultáneos: resumen y detalle en el tooltip
+        const up = list.filter(s => s.connected).length;
+        el.textContent = t('cluster.multi', { up, total: list.length });
+        el.title = list.map(s => `${s.connected ? '●' : '○'} ${s.name} · ${nodeName(s.node)} · ${s.host}:${s.port}`).join('\n');
+        return;
+    }
     const node = nodeName(c.node);
     el.textContent = c.connected ? t('cluster.connected', { node, host: c.host }) : t('cluster.down', { node });
-    el.title = c.connected ? `${c.host}:${c.port}` : t('cluster.reconnecting');
+    el.title = c.connected ? `${c.source ? c.source + ' · ' : ''}${c.host}:${c.port}` : t('cluster.reconnecting');
 }
 
 // --- Relojes ---

@@ -14,3 +14,4 @@ build/
 .npm/
 .cache/
 *.md
+data/

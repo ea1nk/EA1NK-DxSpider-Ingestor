@@ -26,60 +26,74 @@ Node.js service that ingests DX spots, enriches them with CTY data from `cty_dic
 
 ## Runtime overview
 
-1. Connects to DXSpider via telnet (`DX_HOST` / `DX_PORT`).
-2. Parses each `DX de ...` line into a normalized spot.
+1. Connects to one or more DX clusters via telnet (sources managed from `/admin`, each with its own backup nodes).
+2. Parses each `DX de ...` line into a normalized spot; spots repeated across sources are stored once.
 3. Enriches `spotter` and `spotted` callsigns with `lookupCallsignInfo` from `callsignLookup.js`.
 4. Buffers spots and writes to MongoDB in batches (`BUFFER_LIMIT`).
-5. Serves API with Fastify on port `3000`.
+5. Serves the web UI, API and WebSocket with Fastify on port `3000`.
+
+Users, DX cluster sources and settings are stored in SQLite (`DATA_DIR/ingestor.db`, mounted at `./data` by `docker-compose.yml`). Spots stay in MongoDB.
+
+## Administration (`/admin`)
+
+- **Status**: uptime, spots per minute, stored spots, CPU/memory, per-source connection state and stats, external data sources.
+- **Sources**: add, edit, enable/disable, reconnect or delete DX cluster sources. Each source has its own callsign (use a different SSID per source), login commands (default `set/skim`) and backup clusters.
+- **Users**: create users, change roles and passwords. `admin` can use `/admin`; `user` can use the history API (`/api/spots`).
+- **My account**: change your own password.
+
+On first start:
+- If there are no sources, one is created from `DX_HOST`, `DX_PORT`, `CALLSIGN` and `DX_HOST_BACKUP` in `.env`. After that, sources are managed only from `/admin`.
+- If there are no users, an admin is created from `ADMIN_USERNAME` / `ADMIN_PASSWORD`. If `ADMIN_PASSWORD` is not set, a random password is printed once in the container log (`docker logs dxspider-ingestor`).
 
 ## Configuration
 
-Environment variables and constants currently used in `ingestor.js`:
+Environment variables:
 
 - `MONGO_URL` (default: `mongodb://db:27017`)
-- `DB_NAME` (default: `rbn_radio`)
+- `DB_NAME` (default: `spider_spots`)
 - `COLLECTION_NAME` (default: `spots`)
-- `DX_HOST` (default: `localhost`)
-- `DX_PORT` (default: `7300`)
-- `DX_HOST_BACKUP` (optional backup nodes, comma separated, each `host` or `host:port`, e.g. `node1.net,node2.net:7300`; tried in order)
-- `DX_PORT_BACKUP` (port for backup nodes without explicit port, default: `DX_PORT`)
+- `DATA_DIR` (SQLite directory, default: `./data`; `/data` in Docker)
+- `ADMIN_USERNAME` / `ADMIN_PASSWORD` (initial admin, only used when there are no users)
+- `SECRET_KEY` (JWT signing key; if unset, a random key is generated and stored in SQLite)
+- `TOKEN_TTL` (JWT lifetime, default: `12h`)
+- `TRUST_PROXY` (`true` only behind a reverse proxy, so the login rate limit uses the real client IP)
+- `DX_HOST`, `DX_PORT`, `CALLSIGN`, `DX_HOST_BACKUP`, `DX_PORT_BACKUP` (only seed the first source on first start)
 - `FAILOVER_ATTEMPTS` (consecutive failures before switching node, default: `3`)
 - `PRIMARY_CHECK_INTERVAL_MS` (how often to check the primary while on backup, default: `300000`)
+- `RECONNECT_DELAY_MS` (default: `10000`)
 - `CONNECT_TIMEOUT_MS` (default: `15000`)
 - `INACTIVITY_TIMEOUT_MS` (reconnect if no data is received, default: `300000`)
-- `HEALTH_GRACE_MS` (`/health` returns 503 once the cluster has been down this long, default: `120000`)
+- `HEALTH_GRACE_MS` (`/health` returns 503 once every source has been down this long, default: `120000`)
 - `MAX_BUFFER` (max spots kept in memory while MongoDB is unavailable, default: `5000`)
 - `RECENT_SPOTS_LIMIT` (recent spots sent to WebSocket clients on connect, default: `200`)
 - `WS_HEARTBEAT_MS` (WebSocket heartbeat interval, default: `30000`)
 - `SPACE_WEATHER_REFRESH_MS` (refresh interval for propagation data, default: `900000`)
-- `CALLSIGN` (default placeholder: `TU_CALLSIGN`)
-- `SECRET_KEY` (JWT signing key)
-- `API_PASSWORD` (password for `/login`)
+- `API_PASSWORD` (legacy password-only login, read-only API token; leave empty to disable)
+- `DISABLE_TOKEN_AUTH` (`true` makes `/api/spots` public)
 
 ## Authentication
 
 ### `POST /login`
-Returns a JWT token when the password is correct.
-
-Request body:
+Returns a JWT token for a user stored in SQLite. Max 10 failed attempts per IP every 15 minutes (HTTP 429).
 
 ```json
-{
-  "password": "radio_password"
-}
+{ "username": "admin", "password": "your-password" }
 ```
 
 Response:
 
 ```json
-{
-  "token": "<jwt-token>"
-}
+{ "token": "<jwt-token>", "user": { "id": 1, "username": "admin", "role": "admin" } }
 ```
 
-Use that token in protected endpoints:
+Legacy: `{ "password": "<API_PASSWORD>" }` without username still returns a read-only API token.
+
+Use the token in protected endpoints:
 
 `Authorization: Bearer <jwt-token>`
+
+### `GET /api/me` / `POST /api/me/password`
+Current user, and change own password (`{ "currentPassword", "newPassword" }`).
 
 ## Endpoints
 
@@ -127,6 +141,15 @@ Solar indices and propagation data, refreshed every 15 minutes (`SPACE_WEATHER_R
 
 ### `GET /api/activity` (public)
 Spot activity over the last 60 minutes from stored spots: `total`, and counts by `bands`, `modes`, `countries` and spotted `calls`. Cached for 60 s.
+
+### Admin API (`/api/admin/*`, role `admin`)
+
+- `GET /api/admin/status`: system status and statistics
+- `GET|POST /api/admin/sources`, `PUT|DELETE /api/admin/sources/:id`, `POST /api/admin/sources/:id/reconnect`
+- `GET|POST /api/admin/users`, `PUT|DELETE /api/admin/users/:id` (the last admin cannot be removed or demoted)
+
+### Errors
+Browsers get a styled 404/500 page; API paths (`/api/*`, `/login`, `/health`) and non-HTML clients get `{ "error": "..." }`.
 
 ### `GET /ws` (websocket)
 Real-time stream of parsed/enriched spots.

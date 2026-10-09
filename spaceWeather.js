@@ -156,17 +156,29 @@ const parsers = {
     }
 };
 
-async function refresh() {
-    await Promise.all(Object.entries(URLS).map(async ([key, url]) => {
+const RETRY_MS = 60 * 1000;
+let retryTimer = null;
+
+async function refreshSources(keys) {
+    const failed = [];
+    await Promise.all(keys.map(async (key) => {
         try {
-            cache[key] = parsers[key](await fetchText(url));
+            cache[key] = parsers[key](await fetchText(URLS[key]));
             status[key] = { ok: true, updatedAt: new Date().toISOString() };
         } catch (err) {
+            failed.push(key);
             status[key] = { ...status[key], ok: false, error: err.message, failedAt: new Date().toISOString() };
             console.error(`Space weather source "${key}" failed: ${err.message}`);
         }
     }));
+    // Transient failures (e.g. a truncated response) are retried after a minute instead of waiting a full cycle
+    if (failed.length && !retryTimer) {
+        retryTimer = setTimeout(() => { retryTimer = null; refreshSources(failed); }, RETRY_MS);
+        retryTimer.unref();
+    }
 }
+
+const refresh = () => refreshSources(Object.keys(URLS));
 
 function startSpaceWeather() {
     refresh();

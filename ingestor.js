@@ -4,29 +4,30 @@
 
 require('dotenv').config();
 
-const net=require('net');
+const os=require('os');
+const fs=require('fs');
 const { MongoClient }=require('mongodb');
-const fastify=require('fastify')({ logger: false });
+// Only trust X-Forwarded-For behind a reverse proxy; otherwise clients could spoof their IP
+const fastify=require('fastify')({ logger: false, trustProxy: (process.env.TRUST_PROXY||'false').toLowerCase()==='true' });
 const websocket=require('@fastify/websocket');
 const jwt=require('@fastify/jwt');
 const fp = require('fastify-plugin');
 const { lookupCallsignInfo }=require('./callsignLookup');
 const { startSpaceWeather, getSpaceWeather }=require('./spaceWeather');
+const db=require('./db');
+const auth=require('./auth');
+const ClusterSource=require('./clusterSource');
 const path = require('path');
 
 // --- CONFIGURATION ---
+// DX cluster sources and users live in SQLite (managed from /admin).
+// DX_HOST, DX_PORT, CALLSIGN and DX_HOST_BACKUP only seed the first source on first run.
 const MONGO_URL=process.env.MONGO_URL||'mongodb://db:27017';
 const DB_NAME=process.env.DB_NAME||'spider_spots';
 const COLLECTION_NAME=process.env.COLLECTION_NAME||'spots';
-const DX_HOST=process.env.DX_HOST||'localhost';
-const DX_PORT=parseInt(process.env.DX_PORT, 10)||7300;
-const DX_HOST_BACKUP=process.env.DX_HOST_BACKUP||'';
-const DX_PORT_BACKUP=parseInt(process.env.DX_PORT_BACKUP, 10)||DX_PORT;
 const FAILOVER_ATTEMPTS=parseInt(process.env.FAILOVER_ATTEMPTS, 10)||3;
 const PRIMARY_CHECK_INTERVAL_MS=parseInt(process.env.PRIMARY_CHECK_INTERVAL_MS, 10)||300000;
-const CALLSIGN=process.env.CALLSIGN||'YOUR_CALLSIGN';
-const SECRET_KEY=process.env.SECRET_KEY||'YOUR_SUPERSECRET_KEY';
-const API_PASSWORD=process.env.API_PASSWORD||'radio_password';
+const API_PASSWORD=process.env.API_PASSWORD||'';
 const DISABLE_TOKEN_AUTH=(process.env.DISABLE_TOKEN_AUTH||'false').toLowerCase()==='true';
 const SERVER_HOST=process.env.SERVER_HOST||'0.0.0.0';
 const SERVER_PORT=parseInt(process.env.SERVER_PORT, 10)||3000;
@@ -41,29 +42,29 @@ const RECENT_SPOTS_LIMIT=parseInt(process.env.RECENT_SPOTS_LIMIT, 10)||200;
 const WS_HEARTBEAT_MS=parseInt(process.env.WS_HEARTBEAT_MS, 10)||30000;
 const WS_MAX_BUFFERED_BYTES=1024 * 1024;
 const HEALTH_GRACE_MS=parseInt(process.env.HEALTH_GRACE_MS, 10)||120000;
+const TOKEN_TTL=process.env.TOKEN_TTL||'12h';
 const MONGO_RETRY_MS=5000;
+
+const SOURCE_OPTS={
+    reconnectDelayMs: RECONNECT_DELAY_MS,
+    connectTimeoutMs: CONNECT_TIMEOUT_MS,
+    inactivityTimeoutMs: INACTIVITY_TIMEOUT_MS,
+    failoverAttempts: FAILOVER_ATTEMPTS,
+    primaryCheckMs: PRIMARY_CHECK_INTERVAL_MS
+};
 
 let spotsCollection;
 let mongoClient;
 let buffer=[];
-const clients=new Set(); 
+const clients=new Set();
 let flushTimer;
-let dxConnected=false;
-let dxDisconnectedSince=Date.now();
+// Running DX cluster sessions, by source id
+const sources=new Map();
+const startedAt=Date.now();
 // Latest spots, sent to WebSocket clients when they (re)connect
 const recentSpots=[];
-// Primary node and optional backup nodes
-// DX_HOST_BACKUP accepts several comma-separated nodes: "host1,host2:7300"
-const dxNodes=[{ name: 'principal', host: DX_HOST, port: DX_PORT }];
-DX_HOST_BACKUP.split(',').map(h => h.trim()).filter(Boolean).forEach((entry, i) => {
-    const [host, port]=entry.split(':');
-    dxNodes.push({ name: `respaldo ${i + 1}`, host, port: parseInt(port, 10)||DX_PORT_BACKUP });
-});
-let activeNode=0;
-let consecutiveFailures=0;
-let primaryCheckTimer=null;
-let dxSocket=null;
-let reconnectTimer=null;
+// Spots accepted per minute over the last hour (for /admin)
+const spotsPerMinute=new Map();
 let shuttingDown=false;
 let lastSpotTimestamp=null;
 // Store seen spots: Key is the fingerprint, Value is the timestamp
@@ -312,23 +313,6 @@ function scheduleBufferFlush() {
     flushTimer=setInterval(() => flushBuffer().catch(console.error), FLUSH_INTERVAL_MS);
 }
 
-function scheduleReconnect() {
-    if (reconnectTimer || shuttingDown) return; // Only one pending reconnection
-    reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        connectToDxCluster();
-    }, RECONNECT_DELAY_MS);
-}
-
-// Graceful close: send 'bye' so the cluster frees the session, destroy as fallback
-function closeDxSocket(socket) {
-    if (!socket || socket.destroyed) return;
-    try {
-        if (socket.writable) socket.end('bye\n');
-    } catch (_) { /* ignore */ }
-    setTimeout(() => socket.destroy(), 3000).unref();
-}
-
 function broadcast(msg) {
     for (const c of clients) {
         // Skip slow clients until they drain their send queue
@@ -336,15 +320,25 @@ function broadcast(msg) {
     }
 }
 
-async function handleDxLine(line) {
+function countSpotMinute() {
+    const minute = Math.floor(Date.now() / 60000);
+    spotsPerMinute.set(minute, (spotsPerMinute.get(minute) || 0) + 1);
+    for (const m of spotsPerMinute.keys()) if (m < minute - 60) spotsPerMinute.delete(m);
+}
+
+// Called by every source for each line received. Returns 'new', 'dup' or null.
+// Duplicates are detected across all sources, so the same spot seen on two clusters is stored once.
+async function handleDxLine(line, source) {
     // A prompt without a trailing newline may precede the spot
     const start = line.indexOf('DX de');
-    if (start === -1) return;
+    if (start === -1) return null;
     const spot = parseSpot(line.slice(start));
-    if (!spot) return false;
-    if (isDuplicate(spot)) return true;
+    if (!spot) return null;
+    if (isDuplicate(spot)) return 'dup';
 
+    spot.source = source.config.name;
     lastSpotTimestamp = spot.timestamp;
+    countSpotMinute();
     const msg = JSON.stringify(spot);
 
     recentSpots.push(spot);
@@ -353,125 +347,83 @@ async function handleDxLine(line) {
 
     buffer.push(spot);
     if (buffer.length >= BUFFER_LIMIT) await flushBuffer();
-    return true;
+    return 'new';
 }
 
-// Switch node after FAILOVER_ATTEMPTS consecutive failures
-function registerFailure() {
-    consecutiveFailures++;
-    if (dxNodes.length < 2 || consecutiveFailures < FAILOVER_ATTEMPTS) return;
-    consecutiveFailures = 0;
-    activeNode = (activeNode + 1) % dxNodes.length;
-    const node = dxNodes[activeNode];
-    console.warn(`⚠️ Cambiando al nodo ${node.name} (${node.host}:${node.port})`);
-}
+// --- DX CLUSTER SOURCES ---
+const sourceKey = (s) => JSON.stringify([s.name, s.host, s.port, s.callsign, s.login_commands, s.backups]);
 
-// Check whether a node accepts TCP connections (without logging in)
-function probeNode(node) {
-    return new Promise((resolve) => {
-        const probe = net.connect(node.port, node.host);
-        const done = (ok) => { probe.destroy(); resolve(ok); };
-        probe.setTimeout(CONNECT_TIMEOUT_MS, () => done(false));
-        probe.once('connect', () => done(true));
-        probe.once('error', () => done(false));
-    });
-}
-
-// While on a backup node, return to the primary as soon as it is available
-function startPrimaryCheck() {
-    if (primaryCheckTimer || dxNodes.length < 2) return;
-    primaryCheckTimer = setInterval(async () => {
-        if (activeNode === 0 || shuttingDown) return;
-        if (!(await probeNode(dxNodes[0]))) return;
-        if (activeNode === 0 || shuttingDown) return;
-        console.log(`✅ Nodo principal disponible de nuevo, volviendo a ${DX_HOST}:${DX_PORT}`);
-        activeNode = 0;
-        consecutiveFailures = 0;
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-        connectToDxCluster();
-    }, PRIMARY_CHECK_INTERVAL_MS);
-    primaryCheckTimer.unref();
-}
-
-function connectToDxCluster() {
+// Start, stop or restart sessions so they match the sources stored in SQLite
+function syncSources() {
     if (shuttingDown) return;
-    // Never more than one live connection
-    if (dxSocket) {
-        const old = dxSocket;
-        dxSocket = null;
-        closeDxSocket(old);
-    }
+    const rows = db.listSources().filter(s => s.enabled);
+    const wanted = new Map(rows.map(r => [r.id, r]));
 
-    const telnet = new net.Socket();
-    dxSocket = telnet;
-    let pending = '';
-    let loginLines = 0;
-    let connected = false;
-    let gotSpot = false;
-    const node = dxNodes[activeNode];
-
-    telnet.setKeepAlive(true, 60000); // Detect dead connections at TCP level
-    telnet.setTimeout(CONNECT_TIMEOUT_MS); // Connect timeout; becomes inactivity timeout once connected
-
-    telnet.on('timeout', () => {
-        console.error(connected
-            ? `Sin datos del cluster en ${INACTIVITY_TIMEOUT_MS / 1000}s, reconectando...`
-            : `Timeout conectando a ${node.host}:${node.port}`);
-        closeDxSocket(telnet);
-    });
-
-    telnet.on('error', (e) => {
-        console.error(`Cluster error: ${e.message}`);
-    });
-
-    console.log(`Conectando al nodo ${node.name} ${node.host}:${node.port} como ${CALLSIGN}...`);
-    telnet.connect(node.port, node.host, () => {
-        connected = true;
-        dxConnected = true;
-        dxDisconnectedSince = null;
-        telnet.setTimeout(INACTIVITY_TIMEOUT_MS);
-        console.log(`📡 Conectado al DXSpider (${node.name})`);
-        telnet.write(`${CALLSIGN}\n`);
-        setTimeout(() => { if (telnet.writable) telnet.write('set/skim\n'); }, 1000);
-    });
-
-    telnet.on('data', async (data) => {
-        // Lines may be split across TCP packets
-        const lines = (pending + data.toString()).split(/\r?\n/);
-        pending = lines.pop();
-        if (pending.length > 4096) pending = '';
-
-        for (const line of lines) {
-            // Log the first lines after connecting (login, rejections, etc.)
-            if (loginLines < 15 && line.trim() && !line.includes('DX de')) {
-                loginLines++;
-                console.log(`[cluster] ${line.trim()}`);
-            }
-            try {
-                if (await handleDxLine(line)) gotSpot = true;
-            } catch (err) {
-                console.error('Error procesando línea:', err.message, '|', line);
-            }
+    for (const [id, running] of sources) {
+        const row = wanted.get(id);
+        if (!row || sourceKey(row) !== sourceKey(running.config)) {
+            running.stop();
+            sources.delete(id);
         }
-    });
+    }
+    for (const row of rows) {
+        if (sources.has(row.id)) continue;
+        const src = new ClusterSource(row, SOURCE_OPTS, handleDxLine);
+        sources.set(row.id, src);
+        // Give a restarted session time to send 'bye' before logging in again with the same callsign
+        setTimeout(() => { if (sources.get(row.id) === src && !shuttingDown) src.start(); }, 3000).unref();
+    }
+}
 
-    telnet.on('close', () => {
-        if (dxSocket !== telnet) return; // Old socket already replaced
-        dxSocket = null;
-        dxConnected = false;
-        if (dxDisconnectedSince === null) dxDisconnectedSince = Date.now();
-        if (shuttingDown) return;
-        // A session that received spots does not count as a failure
-        if (gotSpot) consecutiveFailures = 0;
-        else registerFailure();
-        console.warn(`Conexión cerrada, reconectando en ${RECONNECT_DELAY_MS / 1000}s...`);
-        scheduleReconnect();
-    });
+function clusterSummary() {
+    const list = [...sources.values()].map(s => s.status());
+    const up = list.filter(s => s.connected);
+    const main = up[0] || list[0];
+    // All sources down since the most recent disconnection (or since startup)
+    const downSince = up.length ? null : Math.max(startedAt, ...list.map(s => s.disconnectedSince || 0));
+    return { list, up, main, downSince };
+}
+
+// --- VALIDATION ---
+const HOST_RE = /^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
+const CALL_RE = /^[A-Za-z0-9/-]{3,20}$/;
+
+function parsePort(v) {
+    const n = parseInt(v, 10);
+    return n >= 1 && n <= 65535 ? n : null;
+}
+
+// Validates a source payload from the admin panel; returns { value } or { error }
+function validateSource(body) {
+    const name = String(body.name || '').trim();
+    const host = String(body.host || '').trim();
+    const port = parsePort(body.port);
+    const callsign = String(body.callsign || '').trim().toUpperCase();
+    const loginCommands = String(body.login_commands ?? 'set/skim').replace(/\r/g, '').trim();
+    if (!name || name.length > 40) return { error: 'Name is required (max 40 characters)' };
+    if (!HOST_RE.test(host)) return { error: 'Invalid host' };
+    if (!port) return { error: 'Invalid port' };
+    if (!CALL_RE.test(callsign)) return { error: 'Invalid callsign' };
+    if (loginCommands.length > 500 || /[\x00-\x09\x0B-\x1F\x7F]/.test(loginCommands)) return { error: 'Invalid login commands' };
+
+    const rawBackups = Array.isArray(body.backups) ? body.backups : [];
+    if (rawBackups.length > 10) return { error: 'Max 10 backup nodes' };
+    const backups = [];
+    for (const b of rawBackups) {
+        const [bh, bp] = typeof b === 'string' ? b.trim().split(':') : [b.host, b.port];
+        const bport = bp === undefined || bp === '' ? port : parsePort(bp);
+        if (!HOST_RE.test(String(bh || '').trim()) || !bport) return { error: `Invalid backup node: ${typeof b === 'string' ? b : `${b.host}:${b.port}`}` };
+        backups.push({ host: String(bh).trim(), port: bport });
+    }
+    return { value: { name, host, port, callsign, login_commands: loginCommands, backups, enabled: body.enabled !== false } };
 }
 
 // --- FASTIFY SETUP ---
-fastify.register(jwt, { secret: SECRET_KEY });
+db.open();
+db.seedSourcesFromEnv();
+auth.ensureInitialAdmin();
+
+fastify.register(jwt, { secret: db.getJwtSecret(), sign: { expiresIn: TOKEN_TTL } });
 fastify.register(fp(async (instance) => { instance.register(websocket); }));
 
 fastify.register(require('@fastify/static'), {
@@ -480,19 +432,62 @@ fastify.register(require('@fastify/static'), {
     decorateReply: true
 });
 
+// --- ERROR PAGES ---
+// Browsers get a styled HTML page; API clients keep getting JSON
+const ERROR_TEMPLATE=fs.readFileSync(path.join(__dirname, 'assets', 'error.html'), 'utf8');
+const JSON_PATHS=/^\/(api|login|health|ws)(\/|$|\?)/;
+
+function wantsHtml(request) {
+    if (JSON_PATHS.test(request.url)) return false;
+    return (request.headers.accept || '').includes('text/html');
+}
+
+function sendError(request, reply, status, message) {
+    reply.code(status);
+    if (wantsHtml(request)) {
+        return reply.type('text/html; charset=utf-8').send(ERROR_TEMPLATE.replaceAll('{{STATUS}}', String(status)));
+    }
+    return reply.send({ error: message });
+}
+
+fastify.setNotFoundHandler((request, reply) => sendError(request, reply, 404, 'Not Found'));
+
+fastify.setErrorHandler((error, request, reply) => {
+    const status = error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 500;
+    if (status >= 500) console.error(`[HTTP ${status}] ${request.method} ${request.url}:`, error);
+    // Client errors (e.g. malformed JSON) keep their message; server errors never leak internals
+    return sendError(request, reply, status, status >= 500 ? 'Internal Server Error' : error.message);
+});
+
+// Valid token for a user that still exists; the role is read from the database
+// so role changes and deleted users take effect immediately
 fastify.decorate("authenticate", async (request, reply) => {
-    if (DISABLE_TOKEN_AUTH) return;
-    try { await request.jwtVerify(); }
-    catch (err) { reply.code(401).send({ error: 'Unauthorized' }); }
+    try {
+        await request.jwtVerify();
+    } catch (err) {
+        return reply.code(401).send({ error: 'Unauthorized' });
+    }
+    if (request.user.legacy) return; // Token from the old API_PASSWORD login (read-only API access)
+    const user = db.getUser(request.user.sub);
+    if (!user) return reply.code(401).send({ error: 'Unauthorized' });
+    request.user = { sub: user.id, username: user.username, role: user.role };
+});
+
+fastify.decorate("requireAdmin", async (request, reply) => {
+    if (request.user?.role !== 'admin') return reply.code(403).send({ error: 'Forbidden' });
 });
 
 // --- API & WS INSTANCE ---
 fastify.register(async (instance) => {
-    
+
     instance.get('/monitor', (req, reply) => {
         return reply.sendFile('spots.html');
     });
-    
+
+    instance.get('/admin', (req, reply) => {
+        return reply.sendFile('admin.html');
+    });
+
     // WebSocket Channel
     instance.get('/ws', { websocket: true }, async (connection, req) => {
         clients.add(connection);
@@ -501,33 +496,75 @@ fastify.register(async (instance) => {
         connection.send(JSON.stringify({ status: "ok", message: "Connected" }));
         // Recent history so clients recover spots missed while disconnected
         connection.send(JSON.stringify({ type: 'history', spots: recentSpots }));
-        
+
         connection.on('close', () => clients.delete(connection));
         connection.on('error', (err) => console.error(`[WS Error]:`, err.message));
-        
+
         await new Promise((resolve) => {
             connection.on('close', resolve);
             connection.on('error', resolve);
         });
     });
 
-    instance.post('/login', async (req) => {
-        if (req.body.password===API_PASSWORD) return { token: instance.jwt.sign({ user: 'admin' }) };
-        throw new Error('Invalid Password');
+    // Login with username/password (users stored in SQLite).
+    // Legacy: { password } alone matching API_PASSWORD still returns a read-only API token.
+    instance.post('/login', async (req, reply) => {
+        const ip = req.ip;
+        if (auth.isRateLimited(ip)) return reply.code(429).send({ error: 'Too many failed attempts, try again later' });
+        const { username, password } = req.body || {};
+        if (typeof password !== 'string' || !password) return reply.code(400).send({ error: 'Missing credentials' });
+
+        if (!username) {
+            if (API_PASSWORD && password === API_PASSWORD) {
+                return { token: instance.jwt.sign({ user: 'api', role: 'user', legacy: true }) };
+            }
+            auth.registerFailedLogin(ip);
+            return reply.code(401).send({ error: 'Invalid credentials' });
+        }
+
+        const user = db.getUserWithHash(String(username));
+        if (!user || !auth.verifyPassword(password, user.password_hash)) {
+            auth.registerFailedLogin(ip);
+            return reply.code(401).send({ error: 'Invalid credentials' });
+        }
+        auth.clearFailedLogins(ip);
+        db.touchLogin(user.id);
+        return {
+            token: instance.jwt.sign({ sub: user.id, username: user.username, role: user.role }),
+            user: { id: user.id, username: user.username, role: user.role }
+        };
+    });
+
+    instance.get('/api/me', { onRequest: [instance.authenticate] }, async (req) => req.user);
+
+    instance.post('/api/me/password', { onRequest: [instance.authenticate] }, async (req, reply) => {
+        if (req.user.legacy) return reply.code(403).send({ error: 'Forbidden' });
+        const { currentPassword, newPassword } = req.body || {};
+        const user = db.getUserWithHash(req.user.username);
+        if (!user || !auth.verifyPassword(String(currentPassword || ''), user.password_hash)) {
+            return reply.code(400).send({ error: 'Current password is incorrect' });
+        }
+        const err = auth.validateCredentials(null, String(newPassword || ''), { requireUsername: false });
+        if (err) return reply.code(400).send({ error: err });
+        db.updateUser(user.id, { passwordHash: auth.hashPassword(String(newPassword)) });
+        return { ok: true };
     });
 
     instance.get('/health', async (_req, reply) => {
-        // Unhealthy if the cluster has been down longer than the grace period
-        const clusterDown = !dxConnected && Date.now() - dxDisconnectedSince > HEALTH_GRACE_MS;
+        const { list, up, main, downSince } = clusterSummary();
+        // Unhealthy if every cluster source has been down longer than the grace period
+        const clusterDown = !up.length && Date.now() - downSince > HEALTH_GRACE_MS;
         if (clusterDown) reply.code(503);
         return {
             ok: !clusterDown,
             dxCluster: {
-                connected: dxConnected,
-                node: dxNodes[activeNode].name,
-                host: dxNodes[activeNode].host,
-                port: dxNodes[activeNode].port
+                connected: up.length > 0,
+                source: main?.name || null,
+                node: main?.node || null,
+                host: main?.host || null,
+                port: main?.port || null
             },
+            sources: list.map(s => ({ name: s.name, connected: s.connected, node: s.node, host: s.host, port: s.port })),
             buffer: { length: buffer.length, lastSpot: lastSpotTimestamp },
             wsClients: clients.size,
             uptime: Math.round(process.uptime())
@@ -541,13 +578,99 @@ fastify.register(async (instance) => {
     instance.get('/api/activity', async () => getActivity());
 
     // Historical API
-    instance.get('/api/spots', { onRequest: [instance.authenticate] }, async (req) => {
+    const spotsAuth = DISABLE_TOKEN_AUTH ? [] : [instance.authenticate];
+    instance.get('/api/spots', { onRequest: spotsAuth }, async (req) => {
         const { mode, band, limit }=req.query;
         let query={};
-        if (mode) query.mode=mode.toUpperCase();
-        if (band) query.band=band;
-        return await spotsCollection.find(query).sort({ timestamp: -1 }).limit(parseInt(limit)||100).toArray();
+        if (mode) query.mode=String(mode).toUpperCase();
+        if (band) query.band=String(band);
+        return await spotsCollection.find(query).sort({ timestamp: -1 }).limit(Math.min(parseInt(limit)||100, 1000)).toArray();
     });
+
+    // --- ADMIN API ---
+    instance.register(async (admin) => {
+        admin.addHook('onRequest', instance.authenticate);
+        admin.addHook('onRequest', instance.requireAdmin);
+
+        admin.get('/status', async () => getSystemStatus());
+
+        // Sources
+        admin.get('/sources', async () => {
+            const running = new Map([...sources].map(([id, s]) => [id, s.status()]));
+            return db.listSources().map(s => ({ ...s, status: running.get(s.id) || null }));
+        });
+
+        admin.post('/sources', async (req, reply) => {
+            const { value, error } = validateSource(req.body || {});
+            if (error) return reply.code(400).send({ error });
+            const created = db.createSource(value);
+            syncSources();
+            return reply.code(201).send(created);
+        });
+
+        admin.put('/sources/:id', async (req, reply) => {
+            const id = parseInt(req.params.id, 10);
+            if (!db.getSource(id)) return reply.code(404).send({ error: 'Not found' });
+            const { value, error } = validateSource(req.body || {});
+            if (error) return reply.code(400).send({ error });
+            const updated = db.updateSource(id, value);
+            syncSources();
+            return updated;
+        });
+
+        admin.delete('/sources/:id', async (req, reply) => {
+            const id = parseInt(req.params.id, 10);
+            if (!db.deleteSource(id)) return reply.code(404).send({ error: 'Not found' });
+            syncSources();
+            return { ok: true };
+        });
+
+        admin.post('/sources/:id/reconnect', async (req, reply) => {
+            const src = sources.get(parseInt(req.params.id, 10));
+            if (!src) return reply.code(404).send({ error: 'Source is not running' });
+            src.reconnect();
+            return { ok: true };
+        });
+
+        // Users
+        admin.get('/users', async () => db.listUsers());
+
+        admin.post('/users', async (req, reply) => {
+            const { username, password, role } = req.body || {};
+            const err = auth.validateCredentials(username, String(password || ''));
+            if (err) return reply.code(400).send({ error: err });
+            if (!['admin', 'user'].includes(role)) return reply.code(400).send({ error: 'Invalid role' });
+            if (db.getUserWithHash(username)) return reply.code(409).send({ error: 'Username already exists' });
+            return reply.code(201).send(db.createUser({ username, passwordHash: auth.hashPassword(String(password)), role }));
+        });
+
+        admin.put('/users/:id', async (req, reply) => {
+            const id = parseInt(req.params.id, 10);
+            const user = db.getUser(id);
+            if (!user) return reply.code(404).send({ error: 'Not found' });
+            const { role, password } = req.body || {};
+            if (role !== undefined && !['admin', 'user'].includes(role)) return reply.code(400).send({ error: 'Invalid role' });
+            // Never leave the system without an administrator
+            if (role === 'user' && user.role === 'admin' && db.countAdmins() <= 1) {
+                return reply.code(400).send({ error: 'Cannot remove the last administrator' });
+            }
+            if (password) {
+                const err = auth.validateCredentials(null, String(password), { requireUsername: false });
+                if (err) return reply.code(400).send({ error: err });
+            }
+            return db.updateUser(id, { role, passwordHash: password ? auth.hashPassword(String(password)) : null });
+        });
+
+        admin.delete('/users/:id', async (req, reply) => {
+            const id = parseInt(req.params.id, 10);
+            const user = db.getUser(id);
+            if (!user) return reply.code(404).send({ error: 'Not found' });
+            if (id === req.user.sub) return reply.code(400).send({ error: 'You cannot delete your own user' });
+            if (user.role === 'admin' && db.countAdmins() <= 1) return reply.code(400).send({ error: 'Cannot remove the last administrator' });
+            db.deleteUser(id);
+            return { ok: true };
+        });
+    }, { prefix: '/api/admin' });
 });
 
 const ACTIVITY_WINDOW_MIN=60;
@@ -570,7 +693,8 @@ async function getActivity() {
             bands: top('$band', 20),
             modes: top('$mode', 10),
             countries: top('$cty.spotted.data.Country', 10),
-            calls: top('$spotted', 10)
+            calls: top('$spotted', 10),
+            sources: top('$source', 20)
         } }
     ]).toArray();
     const toList=(rows) => rows.map(r => ({ name: r._id, count: r.count }));
@@ -582,10 +706,68 @@ async function getActivity() {
             bands: toList(result.bands),
             modes: toList(result.modes),
             countries: toList(result.countries),
-            calls: toList(result.calls)
+            calls: toList(result.calls),
+            sources: toList(result.sources)
         }
     };
     return activityCache.data;
+}
+
+// System status and statistics for /admin
+async function getSystemStatus() {
+    const mem = process.memoryUsage();
+    const nowMinute = Math.floor(Date.now() / 60000);
+    const rate = [];
+    for (let m = nowMinute - 59; m <= nowMinute; m++) rate.push({ t: m * 60000, count: spotsPerMinute.get(m) || 0 });
+
+    let mongo = { ok: false };
+    try {
+        const stats = await mongoClient.db(DB_NAME).stats();
+        mongo = {
+            ok: true,
+            spots: await spotsCollection.estimatedDocumentCount(),
+            dataSize: stats.dataSize,
+            storageSize: stats.storageSize,
+            indexSize: stats.indexSize
+        };
+    } catch (err) {
+        mongo = { ok: false, error: err.message };
+    }
+
+    let sqliteSize = null;
+    try { sqliteSize = fs.statSync(db.DB_FILE).size; } catch (_) { /* ignore */ }
+
+    const activity = await getActivity().catch(() => null);
+    const sw = getSpaceWeather();
+
+    return {
+        system: {
+            startedAt,
+            uptime: Math.round(process.uptime()),
+            node: process.version,
+            platform: `${os.type()} ${os.release()} (${os.arch()})`,
+            hostname: os.hostname(),
+            cpus: os.cpus().length,
+            loadavg: os.loadavg(),
+            memTotal: os.totalmem(),
+            memFree: os.freemem(),
+            processRss: mem.rss,
+            processHeap: mem.heapUsed
+        },
+        spots: {
+            lastSpot: lastSpotTimestamp,
+            buffer: buffer.length,
+            recent: recentSpots.length,
+            lastHour: activity?.total ?? null,
+            bySourceLastHour: activity?.sources || [],
+            perMinute: rate
+        },
+        mongo,
+        sqlite: { file: db.DB_FILE, size: sqliteSize, users: db.countUsers() },
+        websocket: { clients: clients.size },
+        sources: [...sources.values()].map(s => s.status()),
+        spaceWeather: sw.sources || {}
+    };
 }
 
 // WebSocket heartbeat: ping frames detect dead clients; the JSON ping keeps
@@ -627,23 +809,21 @@ async function start() {
     spotsCollection=mongoClient.db(DB_NAME).collection(COLLECTION_NAME);
     await spotsCollection.createIndex({ timestamp: -1 });
     await spotsCollection.createIndex({ timestamp: 1 }, { expireAfterSeconds: TTL_SECONDS });
-    
+
     scheduleBufferFlush();
     await fastify.listen({ port: SERVER_PORT, host: SERVER_HOST });
     console.log(`🚀 Server running on ${SERVER_HOST}:${SERVER_PORT}`);
     startWsHeartbeat();
     startSpaceWeather();
-    connectToDxCluster();
-    startPrimaryCheck();
+    syncSources();
 }
 
-// Clean shutdown (docker stop/restart): notify the cluster to avoid stale sessions
+// Clean shutdown (docker stop/restart): notify the clusters to avoid stale sessions
 async function shutdown(signal) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`${signal} recibido, cerrando...`);
-    clearTimeout(reconnectTimer);
-    closeDxSocket(dxSocket);
+    for (const s of sources.values()) s.stop();
     try { await flushBuffer(); } catch (_) { /* ignore */ }
     setTimeout(() => process.exit(0), 1000);
 }

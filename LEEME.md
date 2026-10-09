@@ -27,60 +27,74 @@ Servicio Node.js que ingiere spots DX, los enriquece con datos CTY desde `cty_di
 
 ## Flujo de funcionamiento
 
-1. Se conecta por telnet a DXSpider (`DX_HOST` / `DX_PORT`).
-2. Parsea cada linea `DX de ...` en un spot normalizado.
+1. Se conecta por telnet a uno o varios clusters DX (orígenes gestionados desde `/admin`, cada uno con sus nodos de respaldo).
+2. Parsea cada linea `DX de ...` en un spot normalizado; los spots repetidos entre orígenes se guardan una sola vez.
 3. Enriquece `spotter` y `spotted` usando `lookupCallsignInfo` de `callsignLookup.js`.
 4. Acumula spots en buffer y los inserta en MongoDB por lotes (`BUFFER_LIMIT`).
-5. Levanta la API Fastify en el puerto `3000`.
+5. Sirve la web, la API y el WebSocket con Fastify en el puerto `3000`.
+
+Los usuarios, los orígenes de spots y los ajustes se guardan en SQLite (`DATA_DIR/ingestor.db`, montado en `./data` por `docker-compose.yml`). Los spots siguen en MongoDB.
+
+## Administración (`/admin`)
+
+- **Estado**: tiempo activo, spots por minuto, spots guardados, CPU/memoria, estado y estadísticas de cada origen y de las fuentes de datos externas.
+- **Orígenes**: añadir, editar, activar/desactivar, reconectar o eliminar orígenes. Cada origen tiene su indicativo (usa un SSID distinto por origen), comandos tras el login (por defecto `set/skim`) y clusters de respaldo.
+- **Usuarios**: crear usuarios, cambiar roles y contraseñas. `admin` accede a `/admin`; `user` accede a la API histórica (`/api/spots`).
+- **Mi cuenta**: cambiar tu contraseña.
+
+En el primer arranque:
+- Si no hay orígenes, se crea uno con `DX_HOST`, `DX_PORT`, `CALLSIGN` y `DX_HOST_BACKUP` del `.env`. A partir de ahí los orígenes se gestionan solo desde `/admin`.
+- Si no hay usuarios, se crea un administrador con `ADMIN_USERNAME` / `ADMIN_PASSWORD`. Si `ADMIN_PASSWORD` no está definido, se genera una contraseña aleatoria que aparece una sola vez en el log del contenedor (`docker logs dxspider-ingestor`).
 
 ## Configuracion
 
-Variables de entorno y constantes usadas en `ingestor.js`:
+Variables de entorno:
 
 - `MONGO_URL` (por defecto: `mongodb://db:27017`)
-- `DB_NAME` (por defecto: `rbn_radio`)
+- `DB_NAME` (por defecto: `spider_spots`)
 - `COLLECTION_NAME` (por defecto: `spots`)
-- `DX_HOST` (por defecto: `localhost`)
-- `DX_PORT` (por defecto: `7300`)
-- `DX_HOST_BACKUP` (nodos de respaldo opcionales, separados por comas, cada uno `host` o `host:puerto`, ej. `nodo1.net,nodo2.net:7300`; se prueban en orden)
-- `DX_PORT_BACKUP` (puerto de los respaldos sin puerto explícito, por defecto: `DX_PORT`)
+- `DATA_DIR` (directorio de SQLite, por defecto: `./data`; `/data` en Docker)
+- `ADMIN_USERNAME` / `ADMIN_PASSWORD` (administrador inicial, solo si no hay usuarios)
+- `SECRET_KEY` (clave de firma JWT; si no se define, se genera una aleatoria y se guarda en SQLite)
+- `TOKEN_TTL` (duración del token JWT, por defecto: `12h`)
+- `TRUST_PROXY` (`true` solo detrás de un proxy inverso, para que el límite de intentos de login use la IP real)
+- `DX_HOST`, `DX_PORT`, `CALLSIGN`, `DX_HOST_BACKUP`, `DX_PORT_BACKUP` (solo crean el primer origen en el primer arranque)
 - `FAILOVER_ATTEMPTS` (fallos seguidos antes de cambiar de nodo, por defecto: `3`)
-- `PRIMARY_CHECK_INTERVAL_MS` (cada cuánto se comprueba el principal mientras se usa el respaldo, por defecto: `300000`)
+- `PRIMARY_CHECK_INTERVAL_MS` (cada cuánto se comprueba el principal mientras se usa un respaldo, por defecto: `300000`)
+- `RECONNECT_DELAY_MS` (por defecto: `10000`)
 - `CONNECT_TIMEOUT_MS` (por defecto: `15000`)
 - `INACTIVITY_TIMEOUT_MS` (reconecta si no llegan datos, por defecto: `300000`)
-- `HEALTH_GRACE_MS` (`/health` devuelve 503 si el cluster lleva este tiempo caído, por defecto: `120000`)
+- `HEALTH_GRACE_MS` (`/health` devuelve 503 si todos los orígenes llevan este tiempo caídos, por defecto: `120000`)
 - `MAX_BUFFER` (máximo de spots en memoria mientras MongoDB no está disponible, por defecto: `5000`)
 - `RECENT_SPOTS_LIMIT` (spots recientes enviados a los clientes WebSocket al conectar, por defecto: `200`)
 - `WS_HEARTBEAT_MS` (intervalo del heartbeat del WebSocket, por defecto: `30000`)
 - `SPACE_WEATHER_REFRESH_MS` (intervalo de actualización de los datos de propagación, por defecto: `900000`)
-- `CALLSIGN` (placeholder por defecto: `TU_CALLSIGN`)
-- `SECRET_KEY` (clave de firma JWT)
-- `API_PASSWORD` (password para `/login`)
+- `API_PASSWORD` (login antiguo solo con contraseña, token de solo lectura para la API; vacío para desactivarlo)
+- `DISABLE_TOKEN_AUTH` (`true` hace pública `/api/spots`)
 
 ## Autenticacion
 
 ### `POST /login`
-Devuelve un token JWT si la password es correcta.
-
-Body:
+Devuelve un token JWT para un usuario guardado en SQLite. Máximo 10 intentos fallidos por IP cada 15 minutos (HTTP 429).
 
 ```json
-{
-  "password": "radio_password"
-}
+{ "username": "admin", "password": "tu-contraseña" }
 ```
 
 Respuesta:
 
 ```json
-{
-  "token": "<jwt-token>"
-}
+{ "token": "<jwt-token>", "user": { "id": 1, "username": "admin", "role": "admin" } }
 ```
+
+Compatibilidad: `{ "password": "<API_PASSWORD>" }` sin usuario sigue devolviendo un token de solo lectura para la API.
 
 Usa el token en endpoints protegidos:
 
 `Authorization: Bearer <jwt-token>`
+
+### `GET /api/me` / `POST /api/me/password`
+Usuario actual y cambio de la propia contraseña (`{ "currentPassword", "newPassword" }`).
 
 ## Endpoints
 
@@ -128,6 +142,15 @@ curl -H "Authorization: Bearer <token>" \
 
 ### `GET /api/activity` (público)
 Actividad de spots en los últimos 60 minutos a partir de los spots guardados: `total` y recuentos por `bands`, `modes`, `countries` e indicativos (`calls`). Cacheado 60 s.
+
+### API de administración (`/api/admin/*`, rol `admin`)
+
+- `GET /api/admin/status`: estado y estadísticas del sistema
+- `GET|POST /api/admin/sources`, `PUT|DELETE /api/admin/sources/:id`, `POST /api/admin/sources/:id/reconnect`
+- `GET|POST /api/admin/users`, `PUT|DELETE /api/admin/users/:id` (el último administrador no se puede eliminar ni degradar)
+
+### Errores
+Los navegadores reciben una página 404/500 con estilo; las rutas de API (`/api/*`, `/login`, `/health`) y los clientes que no piden HTML reciben `{ "error": "..." }`.
 
 ### `GET /ws` (websocket)
 Canal en tiempo real de spots parseados/enriquecidos.
