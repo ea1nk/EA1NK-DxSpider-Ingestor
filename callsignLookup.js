@@ -1,26 +1,38 @@
 const fs=require("fs");
-const path=require("path");
+const { resolvePath }=require("./referenceData");
 
-const DICT_PATH=path.join(__dirname, "cty_dict.json");
-const EQSL_USERS_PATH=path.join(__dirname, "eqsl-users.txt");
-const LOTW_USERS_PATH=path.join(__dirname, "lotw-users.csv");
+// Files are resolved on every (re)load: the weekly updated copy in DATA_DIR/reference
+// takes precedence over the one bundled with the app
+const DICT_FILE="cty_dict.json";
+const EQSL_USERS_FILE="eqsl-users.txt";
+const LOTW_USERS_FILE="lotw-users.csv";
+const CLUBLOG_USERS_FILE="clublog-users.csv";
 
 let cachedDictionary=null;
 let cachedEqslUsers=null;
 let cachedLotwUsers=null;
+let cachedClublogUsers=null;
 
-function loadDictionary(dictPath=DICT_PATH) {
-    if (!cachedDictionary||dictPath!==DICT_PATH) {
-        const raw=fs.readFileSync(dictPath, "utf8");
+// Drop cached data so the next lookup reads the updated files
+function reloadReferenceData(key) {
+    if (!key||key==="cty") cachedDictionary=null;
+    if (!key||key==="eqsl") cachedEqslUsers=null;
+    if (!key||key==="lotw") cachedLotwUsers=null;
+    if (!key||key==="clublog") cachedClublogUsers=null;
+}
+
+function loadDictionary() {
+    if (!cachedDictionary) {
+        const raw=fs.readFileSync(resolvePath(DICT_FILE), "utf8");
         cachedDictionary=JSON.parse(raw);
     }
 
     return cachedDictionary;
 }
 
-function loadEqslUsers(filePath=EQSL_USERS_PATH) {
-    if (!cachedEqslUsers||filePath!==EQSL_USERS_PATH) {
-        const raw=fs.readFileSync(filePath, "utf8");
+function loadEqslUsers() {
+    if (!cachedEqslUsers) {
+        const raw=fs.readFileSync(resolvePath(EQSL_USERS_FILE), "utf8");
         const users=new Set();
 
         for (const line of raw.split(/\r?\n/)) {
@@ -35,9 +47,9 @@ function loadEqslUsers(filePath=EQSL_USERS_PATH) {
     return cachedEqslUsers;
 }
 
-function loadLotwUsers(filePath=LOTW_USERS_PATH) {
-    if (!cachedLotwUsers||filePath!==LOTW_USERS_PATH) {
-        const raw=fs.readFileSync(filePath, "utf8");
+function loadLotwUsers() {
+    if (!cachedLotwUsers) {
+        const raw=fs.readFileSync(resolvePath(LOTW_USERS_FILE), "utf8");
         const users=new Set();
 
         for (const line of raw.split(/\r?\n/)) {
@@ -52,6 +64,52 @@ function loadLotwUsers(filePath=LOTW_USERS_PATH) {
     }
 
     return cachedLotwUsers;
+}
+
+// Club Log data by callsign: { clublog: uploads logs, oqrs: accepts OQRS, locator: Maidenhead grid }
+function loadClublogUsers() {
+    if (!cachedClublogUsers) {
+        const users=new Map();
+        const file=resolvePath(CLUBLOG_USERS_FILE);
+        // No bundled copy: empty until the first download
+        if (file) {
+            const raw=fs.readFileSync(file, "utf8");
+            for (const line of raw.split(/\r?\n/)) {
+                const [callsign, clublog, oqrs, locator]=line.split(",");
+                const token=(callsign||"").trim().toUpperCase();
+                if (!token||token==="CALLSIGN") continue;
+                users.set(token, { clublog: clublog==="1", oqrs: oqrs==="1", locator: locator||null });
+            }
+        }
+        cachedClublogUsers=users;
+    }
+
+    return cachedClublogUsers;
+}
+
+// Centre of a Maidenhead locator (4 or 6 characters)
+function locatorToLatLon(loc) {
+    if (!loc||!/^[A-R]{2}\d{2}([A-X]{2})?$/i.test(loc)) return null;
+    const L=loc.toUpperCase();
+    let lon=(L.charCodeAt(0)-65)*20-180+Number(L[2])*2;
+    let lat=(L.charCodeAt(1)-65)*10-90+Number(L[3]);
+    if (L.length===6) {
+        lon+=(L.charCodeAt(4)-65)*(5/60)+2.5/60;
+        lat+=(L.charCodeAt(5)-65)*(2.5/60)+1.25/60;
+    } else {
+        lon+=1;
+        lat+=0.5;
+    }
+    return { lat: Math.round(lat*1000)/1000, lon: Math.round(lon*1000)/1000 };
+}
+
+function referenceCounts() {
+    return {
+        cty: cachedDictionary ? Object.keys(cachedDictionary).length : null,
+        lotw: cachedLotwUsers ? cachedLotwUsers.size : null,
+        eqsl: cachedEqslUsers ? cachedEqslUsers.size : null,
+        clublog: cachedClublogUsers ? [...cachedClublogUsers.values()].filter(u => u.clublog).length : null,
+    };
 }
 
 function getCallsignCandidates(callsign) {
@@ -84,17 +142,30 @@ function existsInCallsignSet(callsign, callsignSet) {
     return false;
 }
 
-function lookupCallsignInfo(callsign, dictPath=DICT_PATH) {
+function findInCallsignMap(callsign, callsignMap) {
+    for (const candidate of getCallsignCandidates(callsign)) {
+        if (candidate&&callsignMap.has(candidate)) return callsignMap.get(candidate);
+    }
+    return undefined;
+}
+
+function lookupCallsignInfo(callsign) {
     if (typeof callsign!=="string"||!callsign.trim()) {
         throw new Error("The callsign must be a non-empty string.");
     }
 
-    const dictionary=loadDictionary(dictPath);
+    const dictionary=loadDictionary();
     const eqslUsers=loadEqslUsers();
     const lotwUsers=loadLotwUsers();
     const normalized=callsign.trim().toUpperCase();
     const eqsl=existsInCallsignSet(normalized, eqslUsers);
     const lotw=existsInCallsignSet(normalized, lotwUsers);
+    const cl=findInCallsignMap(normalized, loadClublogUsers());
+    const clublog=!!cl?.clublog;
+    const oqrs=!!cl?.oqrs;
+    // Station locator from Club Log, with its coordinates (east-positive longitude)
+    const locator=cl?.locator||null;
+    const grid=locator ? { locator, ...locatorToLatLon(locator) } : null;
 
     const buildResult=(matchedKey, entry) => ({
         searchedCallsign: normalized,
@@ -102,6 +173,9 @@ function lookupCallsignInfo(callsign, dictPath=DICT_PATH) {
         data: entry,
         eqsl,
         lotw,
+        clublog,
+        oqrs,
+        grid,
     });
 
     const findLongestPrefix=(token) => {
@@ -167,9 +241,23 @@ function lookupCallsignInfo(callsign, dictPath=DICT_PATH) {
         data: null,
         eqsl,
         lotw,
+        clublog,
+        oqrs,
+        grid,
     };
+}
+
+// Load everything now (e.g. right after an update) instead of on the next spot
+function preloadReferenceData() {
+    loadDictionary();
+    loadEqslUsers();
+    loadLotwUsers();
+    loadClublogUsers();
 }
 
 module.exports={
     lookupCallsignInfo,
+    reloadReferenceData,
+    preloadReferenceData,
+    referenceCounts,
 };

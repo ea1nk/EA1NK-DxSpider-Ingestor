@@ -12,7 +12,7 @@ const MODOS = [
     'CW', 'SSB', 'FT8', 'FT4', 'RTTY', 'PSK', 'DIGI'
 ];
 const TIPOS = ['RBN', 'TRAD'];
-const QSL_FILTERS = ['LoTW', 'eQSL'];
+const QSL_FILTERS = ['LoTW', 'eQSL', 'Club Log', 'OQRS'];
 
 let filtros = {
     bandas: [...BANDAS],
@@ -61,6 +61,8 @@ function getSpotQslFlags(spot) {
     return {
         hasLotw: isTruthyQsl(spot?.cty?.spotted?.lotw),
         hasEqsl: isTruthyQsl(spot?.cty?.spotted?.eqsl),
+        hasClublog: isTruthyQsl(spot?.cty?.spotted?.clublog),
+        hasOqrs: isTruthyQsl(spot?.cty?.spotted?.oqrs),
     };
 }
 
@@ -100,13 +102,10 @@ function filtrarSpots() {
         let qslMatch = true;
         const activeQsl = getNormalizedActiveQslFilters();
         if (activeQsl.length > 0) {
-            const { hasLotw, hasEqsl } = getSpotQslFlags(spot);
-
-            if (activeQsl.length === 1) {
-                qslMatch = activeQsl[0] === 'LoTW' ? hasLotw : hasEqsl;
-            } else {
-                qslMatch = hasLotw || hasEqsl;
-            }
+            // Basta con que cumpla uno de los servicios seleccionados
+            const f = getSpotQslFlags(spot);
+            const has = { 'LoTW': f.hasLotw, 'eQSL': f.hasEqsl, 'Club Log': f.hasClublog, 'OQRS': f.hasOqrs };
+            qslMatch = activeQsl.some(q => has[q]);
         }
         const callMatch = filtros.indicativos.length === 0 || filtros.indicativos.some(call => spot.spotted.toLowerCase().includes(call.toLowerCase()));
         return bandMatch && modeMatch && tipoMatch && qslMatch && callMatch;
@@ -139,16 +138,17 @@ function crearSpotRow(spot) {
     row.dataset.call = spot.spotted.toLowerCase();
     const adif = spot.cty?.spotted?.data?.ADIF;
     const flagImg = adif ? `<img src="/flags/${encodeURIComponent(adif)}.svg" class="flag" alt="" onerror="this.style.visibility='hidden'">` : '<span class="flag-empty"></span>';
-    const { hasLotw, hasEqsl } = getSpotQslFlags(spot);
+    const { hasLotw, hasEqsl, hasClublog, hasOqrs } = getSpotQslFlags(spot);
+    const locator = spot.cty?.spotted?.grid?.locator;
     const timeZ = spot.time_z ? `${spot.time_z.slice(0, 2)}:${spot.time_z.slice(2, 4)}` : '';
     const country = spot.cty?.spotted?.data?.Country || 'Unknown';
     const info = spot.snr ? `<span class="snr">${escHtml(spot.snr)} dB</span>` : `<i>${escHtml(spot.comment)}</i>`;
     row.innerHTML = `
         <td class="time-col">${escHtml(timeZ)}</td>
         <td><span class="freq">${spot.freq.toFixed(1)}</span><span class="band">${escHtml(spot.band)}</span></td>
-        <td><div class="dx">${flagImg}<span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign" title="${escHtml(t('qrz.title'))}" style="cursor:pointer;">${escHtml(spot.spotted)}</span><span class="country" title="${escHtml(country)}">${escHtml(country)}</span></div></td>
+        <td><div class="dx">${flagImg}<span class="badge ${spot.rbn ? 'rbn-type':'trad-type'}">${spot.rbn ? 'RBN':'TRAD'}</span><span class="callsign" title="${escHtml(t('qrz.title'))}" style="cursor:pointer;">${escHtml(spot.spotted)}</span><span class="country" title="${escHtml(country)}">${escHtml(country)}</span>${locator ? `<span class="locator" title="${escHtml(t('qsl.locatorTitle'))}">${escHtml(locator)}</span>` : ''}</div></td>
         <td><span class="mode-label mode-${escHtml(spot.mode)}">${escHtml(spot.mode)}</span></td>
-        <td><span class="qsl-label ${hasLotw ? 'selected' : 'desactivado'}">LoTW</span><span class="qsl-label ${hasEqsl ? 'selected' : 'desactivado'}">eQSL</span></td>
+        <td><span class="qsl-label ${hasLotw ? 'selected' : 'desactivado'}">LoTW</span><span class="qsl-label ${hasEqsl ? 'selected' : 'desactivado'}">eQSL</span><span class="qsl-label ${hasClublog ? 'selected' : 'desactivado'}" title="${escHtml(t(hasOqrs ? 'qsl.clublogOqrs' : 'qsl.clublog'))}">CLog${hasOqrs ? '<sup class="oqrs">OQRS</sup>' : ''}</span></td>
         <td><span class="spotter">${escHtml(spot.spotter)}</span><span class="spotter-country">${escHtml(spot.cty?.spotter?.data?.Country || '')}</span></td>
         <td class="info" title="${escHtml(spot.comment)}">${info}</td>
     `;

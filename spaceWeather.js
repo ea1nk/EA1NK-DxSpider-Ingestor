@@ -28,7 +28,7 @@ const status = {};
 async function fetchText(url) {
     const res = await fetch(url, {
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        headers: { 'User-Agent': 'EA1NK-DxSpider-Ingestor' }
+        headers: { 'User-Agent': require('./referenceData').USER_AGENT }
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.text();

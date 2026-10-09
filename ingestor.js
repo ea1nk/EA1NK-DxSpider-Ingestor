@@ -12,7 +12,8 @@ const fastify=require('fastify')({ logger: false, trustProxy: (process.env.TRUST
 const websocket=require('@fastify/websocket');
 const jwt=require('@fastify/jwt');
 const fp = require('fastify-plugin');
-const { lookupCallsignInfo }=require('./callsignLookup');
+const { lookupCallsignInfo, reloadReferenceData, preloadReferenceData, referenceCounts }=require('./callsignLookup');
+const referenceData=require('./referenceData');
 const { startSpaceWeather, getSpaceWeather }=require('./spaceWeather');
 const db=require('./db');
 const auth=require('./auth');
@@ -607,6 +608,12 @@ fastify.register(async (instance) => {
 
         admin.get('/status', async () => getSystemStatus());
 
+        // Reference data (CTY, LoTW, eQSL, Club Log): force an update now
+        admin.post('/reference/update', async (req, reply) => {
+            referenceData.updateAll({ force: true }).catch(err => console.error('Reference update failed:', err.message));
+            return reply.code(202).send({ ok: true });
+        });
+
         // Sources
         admin.get('/sources', async () => {
             const running = new Map([...sources].map(([id, s]) => [id, s.status()]));
@@ -775,10 +782,14 @@ async function computeActivityDetail(minutes) {
         { $limit: limit }
     ];
     const distinct=(field) => [{ $group: { _id: field } }, { $count: 'n' }];
-    // Spots grouped by CTY coordinates (centre of the entity or of the prefix area)
+    // Spots grouped by position: the station locator from Club Log when known (rounded to 1°),
+    // otherwise the CTY coordinates of the entity or prefix area (CTY longitudes are positive to the west)
     const points=(who) => [
         { $group: {
-            _id: { lat: `$cty.${who}.data.Latitude`, lon: `$cty.${who}.data.Longitude` },
+            _id: {
+                lat: { $ifNull: [{ $round: [`$cty.${who}.grid.lat`, 0] }, `$cty.${who}.data.Latitude`] },
+                lon: { $ifNull: [{ $round: [`$cty.${who}.grid.lon`, 0] }, { $multiply: [-1, `$cty.${who}.data.Longitude`] }] }
+            },
             count: { $sum: 1 },
             country: { $first: `$cty.${who}.data.Country` },
             prefix: { $first: `$cty.${who}.matchedCallsign` }
@@ -808,8 +819,7 @@ async function computeActivityDetail(minutes) {
             mapSpotters: points('spotter')
         } }
     ], { allowDiskUse: true }).toArray();
-    // CTY longitudes are positive to the west: convert to standard (east positive)
-    const toPoints=(rows) => rows.map(x => ({ lat: x._id.lat, lon: -x._id.lon, count: x.count, country: x.country, prefix: x.prefix }));
+    const toPoints=(rows) => rows.map(x => ({ lat: x._id.lat, lon: x._id.lon, count: x.count, country: x.country, prefix: x.prefix }));
 
     const n=(arr) => arr[0]?.n || 0;
     const data={
@@ -893,7 +903,8 @@ async function getSystemStatus() {
         sqlite: { file: db.DB_FILE, size: sqliteSize, users: db.countUsers() },
         websocket: { clients: clients.size },
         sources: [...sources.values()].map(s => s.status()),
-        spaceWeather: sw.sources || {}
+        spaceWeather: sw.sources || {},
+        reference: referenceData.getReferenceStatus(referenceCounts())
     };
 }
 
@@ -943,6 +954,12 @@ async function start() {
     startWsHeartbeat();
     startSpaceWeather();
     startActivityWarmup();
+    // Weekly refresh of CTY, LoTW, eQSL and Club Log data; reload right after each update
+    preloadReferenceData();
+    referenceData.startReferenceUpdates((key) => {
+        reloadReferenceData(key);
+        preloadReferenceData();
+    });
     syncSources();
 }
 

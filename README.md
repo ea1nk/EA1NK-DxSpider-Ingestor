@@ -41,8 +41,8 @@ Users, DX cluster sources and settings are stored in SQLite (`DATA_DIR/ingestor.
 All pages are in Spanish by default, with an ES | EN switch in the header (or `?lang=en`). They share a `Powered by EA1NK - SCQ Devices` footer.
 
 ### `/` Live spots
-- Real-time spot table (one line per spot) with UTC time, frequency, DXCC entity and flag, mode, LoTW/eQSL, spotter and comment/SNR. Double-click a callsign to open QRZ.
-- Filter bar: bands, modes, RBN/manual, LoTW/eQSL and watched callsigns; active filters shown as removable chips, remembered in the browser.
+- Real-time spot table (one line per spot) with UTC time, frequency, DXCC entity and flag, station locator (Club Log), mode, LoTW/eQSL/Club Log (with OQRS), spotter and comment/SNR. Double-click a callsign to open QRZ.
+- Filter bar: bands, modes, RBN/manual, LoTW/eQSL/Club Log/OQRS and watched callsigns; active filters shown as removable chips, remembered in the browser.
 - Space weather: SFI and SSN (30-day trend), A and K indices, X-ray class, solar wind, Bz, HF noise and NOAA R/S/G scales.
 - Side panel: HF band conditions day/night, band activity and most active entities/callsigns (last hour), Kp (3 days + NOAA forecast), GOES X-ray (6 h), VHF conditions and a live image of the Sun (NASA SDO).
 - UTC/local clocks and DX cluster connection status. Reconnects automatically and recovers recent spots after a disconnection.
@@ -58,6 +58,21 @@ See below.
 
 ### Error pages
 Browsers get styled 404/500 pages; API clients get JSON.
+
+## Reference data (CTY, LoTW, eQSL, Club Log)
+
+Spots are enriched with four reference datasets, refreshed automatically every `REFERENCE_UPDATE_DAYS` days (default 7; checked at startup and every 6 hours):
+
+| Data | Source | Used for |
+|---|---|---|
+| CTY | AD1C `cty.plist` (country-files.com), converted to `cty_dict.json` | DXCC entity, zones, continent, coordinates |
+| LoTW | ARRL `lotw-user-activity.csv` | `lotw` flag |
+| eQSL | eQSL AG member list | `eqsl` flag |
+| Club Log | `clublog-users.json.zip`, reduced to `clublog-users.csv` | `clublog` (uploads logs), `oqrs` (accepts OQRS) and station `grid` locator |
+
+Downloads are validated before replacing the previous files and stored in `DATA_DIR/reference` (the `./data` volume), so they survive image rebuilds; the copies in the repository are only used until the first download. Data is reloaded without restarting. `/admin` shows the status of each dataset and has an **Update now** button.
+
+New spot fields under `cty.spotted` / `cty.spotter`: `clublog`, `oqrs` and `grid` (`{ locator, lat, lon }` from Club Log). The `/activity` world map uses the locator position when available (rounded to 1°) and the CTY coordinates otherwise.
 
 ## Administration (`/admin`)
 
@@ -93,6 +108,8 @@ Environment variables:
 - `RECENT_SPOTS_LIMIT` (recent spots sent to WebSocket clients on connect, default: `200`)
 - `WS_HEARTBEAT_MS` (WebSocket heartbeat interval, default: `30000`)
 - `SPACE_WEATHER_REFRESH_MS` (refresh interval for propagation data, default: `900000`)
+- `REFERENCE_UPDATE_DAYS` (days between CTY/LoTW/eQSL/Club Log updates, default: `7`)
+- `DOWNLOAD_USER_AGENT` (User-Agent for external downloads, default: a desktop Chrome string; some sources reject other clients)
 - `API_PASSWORD` (legacy password-only login, read-only API token; leave empty to disable)
 - `DISABLE_TOKEN_AUTH` (`true` makes `/api/spots` public)
 

@@ -195,6 +195,7 @@ async function loadStatus() {
     renderRateChart(s.spots.perMinute);
     renderStatusSources(s.sources, s.spots.bySourceLastHour);
     renderStatusData(s.spaceWeather);
+    renderReference(s.reference);
     $('status-system').innerHTML = [
         [t('st.host'), sys.hostname],
         [t('st.platform'), sys.platform],
@@ -236,6 +237,43 @@ function renderStatusData(sources) {
             <td>${esc(fmtAgo(v.updatedAt ? new Date(v.updatedAt).getTime() : null))}</td>
         </tr>`).join('')}</tbody></table>` : `<p class="muted">${esc(t('loading'))}</p>`;
 }
+
+// --- Datos de referencia (CTY, LoTW, eQSL, Club Log) ---
+const REF_NAMES = { cty: 'CTY (AD1C)', lotw: 'LoTW', eqsl: 'eQSL (AG)', clublog: 'Club Log' };
+
+function renderReference(ref) {
+    if (!ref) return;
+    $('ref-sub').textContent = t('ref.sub', { d: ref.updateDays });
+    $('ref-update').disabled = ref.running;
+    $('ref-update').textContent = t(ref.running ? 'ref.updating' : 'ref.update');
+    $('status-reference').innerHTML = `<table>
+        <thead><tr><th>${esc(t('ref.dataset'))}</th><th>${esc(t('st.col.status'))}</th><th>${esc(t('st.col.updated'))}</th><th class="num">${esc(t('ref.entries'))}</th><th class="num">${esc(t('ref.size'))}</th><th>${esc(t('st.col.lastError'))}</th></tr></thead>
+        <tbody>${ref.datasets.map(d => {
+            const state = d.updating ? chip('warning', t('ref.updating'))
+                : d.lastError ? chip('critical', t('st.failing'))
+                : d.bundled ? chip('warning', t('ref.bundled'))
+                : chip('good', t('st.ok'));
+            return `<tr>
+                <td><b>${esc(REF_NAMES[d.key] || d.key)}</b><br><span class="muted mono">${esc(d.file)}</span></td>
+                <td>${state}</td>
+                <td>${d.updatedAt ? `${esc(fmtDate(new Date(d.updatedAt)))}<br><span class="muted">${esc(fmtAgo(d.updatedAt))}</span>` : esc(t('adm.never'))}</td>
+                <td class="num">${d.entries == null ? '—' : fmtNum(d.entries)}</td>
+                <td class="num">${d.size == null ? '—' : esc(fmtBytes(d.size))}</td>
+                <td>${d.lastError ? `<span class="err-text" title="${esc(d.lastError)}">${esc(d.lastError)}</span><br><span class="muted">${esc(fmtAgo(d.lastErrorAt))}</span>` : '<span class="muted">—</span>'}</td>
+            </tr>`;
+        }).join('')}</tbody></table>`;
+}
+
+$('ref-update').onclick = async () => {
+    try {
+        await api('POST', '/api/admin/reference/update');
+        toast(t('ref.started'));
+        $('ref-update').disabled = true;
+        $('ref-update').textContent = t('ref.updating');
+    } catch (err) {
+        toast(t('adm.error', { msg: err.message }), true);
+    }
+};
 
 // Columnas de spots/minuto (una serie: sin leyenda, el título la nombra)
 const tip = document.createElement('div');
