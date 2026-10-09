@@ -259,7 +259,9 @@ function renderDatabase(m) {
         [t('db.ttl'), ttlDays ? `<b>${fmtDays(ttlDays)} ${esc(t('db.days'))}</b> · ${esc(t('db.estimate', { size: fmtBytes(estimate(m, ttlDays)) }))}` : esc(t('db.noTtl'))]
     ];
     if (m.fsTotalSize) {
-        rows.push([t('db.volume'), `<b>${esc(fmtBytes(m.fsUsedSize))}</b> / ${esc(fmtBytes(m.fsTotalSize))} · ${esc(t('db.free', { size: fmtBytes(m.fsTotalSize - m.fsUsedSize) }))}`]);
+        // fsUsedSize de MongoDB incluye los bloques reservados del sistema de archivos (ext4 reserva un 5 % para root),
+        // así que se muestra el espacio libre disponible, que es la cifra útil
+        rows.push([t('db.volume'), `<b>${esc(t('db.free', { size: fmtBytes(m.fsTotalSize - m.fsUsedSize) }))}</b> ${esc(t('db.of', { total: fmtBytes(m.fsTotalSize) }))}`]);
     }
     el.innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('');
     renderDbSim();
