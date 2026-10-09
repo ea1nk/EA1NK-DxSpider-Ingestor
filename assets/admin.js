@@ -196,6 +196,7 @@ async function loadStatus() {
     renderStatusSources(s.sources, s.spots.bySourceLastHour);
     renderStatusData(s.spaceWeather);
     renderReference(s.reference);
+    renderDatabase(s.mongo);
     $('status-system').innerHTML = [
         [t('st.host'), sys.hostname],
         [t('st.platform'), sys.platform],
@@ -237,6 +238,58 @@ function renderStatusData(sources) {
             <td>${esc(fmtAgo(v.updatedAt ? new Date(v.updatedAt).getTime() : null))}</td>
         </tr>`).join('')}</tbody></table>` : `<p class="muted">${esc(t('loading'))}</p>`;
 }
+
+// --- Base de datos: tamaño actual y estimación según la retención ---
+let lastMongo = null;
+let dbDays = 30;
+try { dbDays = parseInt(localStorage.getItem('dxadmin-db-days'), 10) || 30; } catch (_) { /* ignore */ }
+
+function renderDatabase(m) {
+    lastMongo = m;
+    const el = $('db-stats');
+    if (!m || !m.ok) { el.innerHTML = `<dt>${esc(t('st.mongo'))}</dt><dd>${esc(t('st.failing'))}${m?.error ? `: ${esc(m.error)}` : ''}</dd>`; $('db-sim').innerHTML = ''; return; }
+    const disk = m.storageSize + m.indexSize;
+    const ttlDays = m.ttlSeconds ? m.ttlSeconds / 86400 : null;
+    const oldestDays = m.oldest ? (Date.now() - new Date(m.oldest).getTime()) / 86400000 : null;
+    const fmtDays = (d) => d.toLocaleString(LOCALE, { maximumFractionDigits: d < 10 ? 1 : 0 });
+    const rows = [
+        [t('db.disk'), `<b>${esc(fmtBytes(disk))}</b> · ${esc(t('db.diskDetail', { data: fmtBytes(m.storageSize), raw: fmtBytes(m.dataSize), idx: fmtBytes(m.indexSize), n: m.indexCount }))}`],
+        [t('db.spots'), `<b>${fmtNum(m.spots)}</b>${m.oldest ? ` · ${esc(t('db.since', { date: fmtDate(new Date(m.oldest)), days: fmtDays(oldestDays) }))}` : ''}`],
+        [t('db.rate'), `<b>${fmtNum(m.last24h)}</b> ${esc(t('db.rateDetail', { b: Math.round(m.bytesPerSpot || 0) }))}`],
+        [t('db.ttl'), ttlDays ? `<b>${fmtDays(ttlDays)} ${esc(t('db.days'))}</b> · ${esc(t('db.estimate', { size: fmtBytes(estimate(m, ttlDays)) }))}` : esc(t('db.noTtl'))]
+    ];
+    if (m.fsTotalSize) {
+        rows.push([t('db.volume'), `<b>${esc(fmtBytes(m.fsUsedSize))}</b> / ${esc(fmtBytes(m.fsTotalSize))} · ${esc(t('db.free', { size: fmtBytes(m.fsTotalSize - m.fsUsedSize) }))}`]);
+    }
+    el.innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('');
+    renderDbSim();
+}
+
+// Estimación lineal: spots de las últimas 24 h × días × bytes en disco por spot
+const estimate = (m, days) => (m.last24h || 0) * days * (m.bytesPerSpot || 0);
+
+function renderDbSim() {
+    const m = lastMongo;
+    if (!m || !m.ok) return;
+    const days = Math.max(1, Math.min(3650, dbDays));
+    const size = estimate(m, days);
+    const free = m.fsTotalSize ? m.fsTotalSize - m.fsUsedSize + (m.storageSize + m.indexSize) : null;
+    const ratio = free ? size / free : null;
+    $('db-sim').innerHTML = `
+        <div class="db-big">${esc(fmtBytes(size))}</div>
+        <div class="db-line">${esc(t('db.simSpots', { n: fmtNum(Math.round((m.last24h || 0) * days)) }))}</div>
+        ${ratio !== null ? `<div class="meter${ratio > 0.9 ? ' crit' : ratio > 0.7 ? ' warn' : ''}"><i style="width:${Math.min(100, ratio * 100).toFixed(1)}%"></i></div>
+        <div class="db-line">${esc(t('db.simDisk', { pct: (ratio * 100).toLocaleString(LOCALE, { maximumFractionDigits: ratio < 0.01 ? 2 : 1 }) }))}</div>` : ''}
+        <div class="db-line">${esc(t('db.simHow', { days, ttl: Math.round(days * 86400) }))}</div>
+        ${ratio !== null && ratio > 0.9 ? `<div class="db-warn">${esc(t('db.simTooBig'))}</div>` : ''}`;
+}
+
+$('db-days').value = dbDays;
+$('db-days').oninput = () => {
+    dbDays = parseInt($('db-days').value, 10) || 30;
+    try { localStorage.setItem('dxadmin-db-days', dbDays); } catch (_) { /* ignore */ }
+    renderDbSim();
+};
 
 // --- Datos de referencia (CTY, LoTW, eQSL, Club Log) ---
 const REF_NAMES = { cty: 'CTY (AD1C)', lotw: 'LoTW', eqsl: 'eQSL (AG)', clublog: 'Club Log' };

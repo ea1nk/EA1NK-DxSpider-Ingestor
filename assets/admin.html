@@ -66,6 +66,18 @@
 
         .site-footer { margin-top: 24px; padding: 12px 0 4px; border-top: 1px solid var(--line); text-align: center; color: var(--muted); font-size: 0.72rem; letter-spacing: 0.3px; }
         .site-footer b { color: #c8ccd8; font-weight: 600; }
+        /* Base de datos */
+        .db-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+        .db-sim { background: var(--card-2); border: 1px solid #262938; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+        .db-days { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; font-size: 0.8rem; color: #ccc; }
+        .db-days-input { display: inline-flex; align-items: center; gap: 6px; }
+        .db-days input { width: 80px; text-align: right; }
+        .db-big { font-size: 1.6rem; font-weight: 700; color: #fff; line-height: 1.1; }
+        .db-line { font-size: 0.78rem; color: var(--muted); }
+        .db-line b { color: #ddd; font-weight: 600; }
+        .db-warn { font-size: 0.74rem; color: #fab219; }
+        @media (max-width: 800px) { .db-grid { grid-template-columns: 1fr; } }
+
         /* Login */
         .login-wrap { min-height: 70vh; display: grid; place-items: center; }
         .login-card { width: min(360px, 100%); display: flex; flex-direction: column; gap: 12px; }
@@ -233,6 +245,18 @@
             </div>
 
             <div class="card">
+                <h2><span data-i18n="db.title">Base de datos</span> <small data-i18n="db.sub"></small></h2>
+                <div class="db-grid">
+                    <dl class="kv" id="db-stats"></dl>
+                    <div class="db-sim">
+                        <label class="db-days"><span data-i18n="db.simLabel">Si la retención fuera de</span>
+                            <span class="db-days-input"><input type="number" id="db-days" min="1" max="3650" value="30"> <span data-i18n="db.days">días</span></span></label>
+                        <div id="db-sim"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
                 <h2><span><span data-i18n="ref.title">Datos de referencia</span> <small id="ref-sub"></small></span>
                     <button class="btn small" type="button" id="ref-update" data-i18n="ref.update">Actualizar ahora</button></h2>
                 <div class="table-wrap" id="status-reference"></div>
@@ -313,7 +337,7 @@
 
     <div id="toast" class="toast" hidden></div>
 
-    <script src="i18n.js?v=20261009l"></script>
-    <script src="admin.js?v=20261009b"></script>
+    <script src="i18n.js?v=20261009m"></script>
+    <script src="admin.js?v=20261009c"></script>
 </body>
 </html>

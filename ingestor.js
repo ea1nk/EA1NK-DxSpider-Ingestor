@@ -890,12 +890,19 @@ async function getSystemStatus() {
     let mongo = { ok: false };
     try {
         const stats = await mongoClient.db(DB_NAME).stats();
+        const spots = await spotsCollection.estimatedDocumentCount();
+        const storage = await getStorageInfo();
         mongo = {
             ok: true,
-            spots: await spotsCollection.estimatedDocumentCount(),
+            spots,
             dataSize: stats.dataSize,
             storageSize: stats.storageSize,
-            indexSize: stats.indexSize
+            indexSize: stats.indexSize,
+            // Bytes on disk per stored spot (compressed data + indexes), used for size estimates
+            bytesPerSpot: spots ? (stats.storageSize + stats.indexSize) / spots : null,
+            fsUsedSize: stats.fsUsedSize ?? null,
+            fsTotalSize: stats.fsTotalSize ?? null,
+            ...storage
         };
     } catch (err) {
         mongo = { ok: false, error: err.message };
@@ -971,12 +978,49 @@ async function connectMongo() {
     }
 }
 
+// TTL index on timestamp. createIndex() fails if the index already exists with another
+// expireAfterSeconds, so a changed TTL_SECONDS is applied to the existing index with collMod.
+async function ensureTtlIndex() {
+    const indexes = await spotsCollection.indexes();
+    const ttl = indexes.find(i => JSON.stringify(i.key) === JSON.stringify({ timestamp: 1 }));
+    if (!ttl) {
+        await spotsCollection.createIndex({ timestamp: 1 }, { expireAfterSeconds: TTL_SECONDS });
+    } else if (ttl.expireAfterSeconds !== TTL_SECONDS) {
+        await mongoClient.db(DB_NAME).command({ collMod: COLLECTION_NAME, index: { keyPattern: { timestamp: 1 }, expireAfterSeconds: TTL_SECONDS } });
+        console.log(`Spot retention changed: ${ttl.expireAfterSeconds}s -> ${TTL_SECONDS}s`);
+    }
+}
+
+// Heavier storage figures for /admin, cached for 5 minutes (the page refreshes every 10 s)
+const STORAGE_CACHE_MS = 5 * 60 * 1000;
+let storageCache = { at: 0, data: null };
+
+async function getStorageInfo() {
+    if (storageCache.data && Date.now() - storageCache.at < STORAGE_CACHE_MS) return storageCache.data;
+    const [last24h, oldest, indexes] = await Promise.all([
+        spotsCollection.countDocuments({ timestamp: { $gte: new Date(Date.now() - 86400000) } }),
+        spotsCollection.find({}, { projection: { timestamp: 1 } }).sort({ timestamp: 1 }).limit(1).next(),
+        spotsCollection.indexes()
+    ]);
+    const ttl = indexes.find(i => i.expireAfterSeconds !== undefined);
+    storageCache = {
+        at: Date.now(),
+        data: {
+            last24h,
+            oldest: oldest?.timestamp || null,
+            ttlSeconds: ttl ? ttl.expireAfterSeconds : null,
+            indexCount: indexes.length
+        }
+    };
+    return storageCache.data;
+}
+
 // --- START ---
 async function start() {
     await connectMongo();
     spotsCollection=mongoClient.db(DB_NAME).collection(COLLECTION_NAME);
     await spotsCollection.createIndex({ timestamp: -1 });
-    await spotsCollection.createIndex({ timestamp: 1 }, { expireAfterSeconds: TTL_SECONDS });
+    await ensureTtlIndex();
 
     scheduleBufferFlush();
     await fastify.listen({ port: SERVER_PORT, host: SERVER_HOST });
