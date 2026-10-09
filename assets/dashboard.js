@@ -383,7 +383,7 @@ function renderHealth(h) {
         el.title = list.map(s => `${s.connected ? '●' : '○'} ${s.name} · ${nodeName(s.node)} · ${s.host}:${s.port}`).join('\n');
         return;
     }
-    const node = nodeName(c.node);
+    const node = nodeName(c.node) || '—';
     el.textContent = c.connected ? t('cluster.connected', { node, host: c.host }) : t('cluster.down', { node });
     el.title = c.connected ? `${c.source ? c.source + ' · ' : ''}${c.host}:${c.port}` : t('cluster.reconnecting');
 }

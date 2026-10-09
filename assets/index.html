@@ -179,6 +179,11 @@
         .spots-table .info { color: #ccc; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
         .spots-table .snr { color: var(--accent); font-weight: 700; }
 
+        .nav-link { color: #aab0c4; text-decoration: none; font-size: 0.82rem; font-weight: 600; padding: 6px 10px; border-radius: 6px; border: 1px solid #343849; background: #1f2230; }
+        .nav-link:hover { color: #fff; border-color: #4a4f63; }
+        .card-link { display: inline-block; margin-top: 8px; color: var(--accent); font-size: 0.75rem; text-decoration: none; }
+        .card-link:hover { text-decoration: underline; }
+
         /* --- Selector de idioma --- */
         .lang-switch { display: inline-flex; background: #1f2230; border: 1px solid #343849; border-radius: 8px; padding: 2px; }
         .lang-switch button { background: none; border: none; color: var(--muted); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.5px; padding: 4px 9px; border-radius: 6px; cursor: pointer; }
@@ -355,6 +360,7 @@
                 <div class="clock"><b id="clock-utc">--:--:--</b><small>UTC · <span id="clock-date"></span></small></div>
                 <div class="clock"><b id="clock-local">--:--</b><small data-i18n="local">Local</small></div>
             </div>
+            <a href="/activity" class="nav-link">📊 <span data-i18n="nav.activity">Actividad</span></a>
             <div id="lang-switch" class="lang-switch" role="group" aria-label="Idioma">
                 <button type="button" data-lang="es" aria-pressed="true">ES</button>
                 <button type="button" data-lang="en" aria-pressed="false">EN</button>
@@ -428,6 +434,7 @@
         <section class="card">
             <h2><span data-i18n="card.activity">Actividad por banda</span> <small id="activity-total" data-i18n="lastHour">última hora</small></h2>
             <div id="band-activity"><p class="empty" data-i18n="loading">Cargando…</p></div>
+            <a href="/activity" class="card-link"><span data-i18n="nav.activity">Actividad</span> →</a>
         </section>
         <section class="card">
             <h2><span data-i18n="card.top">Más activos</span> <small data-i18n="lastHour">última hora</small></h2>
@@ -462,8 +469,8 @@
         <span id="sources-updated"></span>
     </footer>
 
-    <script src="i18n.js?v=20261009"></script>
+    <script src="i18n.js?v=20261009c"></script>
     <script src="monitor.js?v=20261008e"></script>
-    <script src="dashboard.js?v=20261009"></script>
+    <script src="dashboard.js?v=20261009b"></script>
 </body>
 </html>

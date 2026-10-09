@@ -484,6 +484,10 @@ fastify.register(async (instance) => {
         return reply.sendFile('spots.html');
     });
 
+    instance.get('/activity', (req, reply) => {
+        return reply.sendFile('activity.html');
+    });
+
     instance.get('/admin', (req, reply) => {
         return reply.sendFile('admin.html');
     });
@@ -575,7 +579,13 @@ fastify.register(async (instance) => {
     instance.get('/api/space-weather', async () => getSpaceWeather());
 
     // Spot activity over the last ACTIVITY_WINDOW_MIN minutes, computed from stored spots
-    instance.get('/api/activity', async () => getActivity());
+    // ?detail=1 adds time series, band/time heatmap, continent paths and unique counts
+    // for the /activity page; ?minutes= selects the window (15, 60, 360 or 1440)
+    instance.get('/api/activity', async (req) => {
+        const minutes = parseInt(req.query.minutes, 10);
+        if (req.query.detail) return getActivityDetail(ACTIVITY_WINDOWS[minutes] ? minutes : 60);
+        return getActivity();
+    });
 
     // Historical API
     const spotsAuth = DISABLE_TOKEN_AUTH ? [] : [instance.authenticate];
@@ -713,6 +723,103 @@ async function getActivity() {
     return activityCache.data;
 }
 
+// Window (minutes) -> time bucket size (minutes) for the /activity charts
+const ACTIVITY_WINDOWS={ 15: 1, 60: 2, 360: 10, 1440: 30 };
+const activityDetailCache=new Map();
+const activityDetailInflight=new Map();
+
+// Stale-while-revalidate: the 24 h aggregation can take several seconds on a Raspberry Pi,
+// so cached data is returned at once and refreshed in the background (one run per window)
+async function getActivityDetail(minutes) {
+    const cached=activityDetailCache.get(minutes);
+    // Short windows refresh every minute; long ones every 5 minutes (heavier aggregation)
+    const ttl=minutes <= 60 ? 60 * 1000 : 5 * 60 * 1000;
+    if (cached && Date.now() - cached.at < ttl) return cached.data;
+    const run=refreshActivityDetail(minutes);
+    if (cached) {
+        run.catch(err => console.error(`Activity ${minutes} min refresh failed:`, err.message));
+        return cached.data;
+    }
+    return run;
+}
+
+function refreshActivityDetail(minutes) {
+    if (!activityDetailInflight.has(minutes)) {
+        const run=computeActivityDetail(minutes).finally(() => activityDetailInflight.delete(minutes));
+        activityDetailInflight.set(minutes, run);
+    }
+    return activityDetailInflight.get(minutes);
+}
+
+// Keep the heavy windows warm so /activity never waits for them
+function startActivityWarmup() {
+    const warm=() => [360, 1440].reduce((p, m) => p.then(() => refreshActivityDetail(m)).catch(() => {}), Promise.resolve());
+    setTimeout(warm, 30 * 1000).unref();
+    setInterval(warm, 5 * 60 * 1000).unref();
+}
+
+async function computeActivityDetail(minutes) {
+    const now=Date.now();
+    const bucketMs=ACTIVITY_WINDOWS[minutes] * 60 * 1000;
+    const since=new Date(now - minutes * 60 * 1000);
+    const tsLong={ $toLong: '$timestamp' };
+    const bucket={ $subtract: [tsLong, { $mod: [tsLong, bucketMs] }] };
+    const count=(id) => [{ $group: { _id: id, count: { $sum: 1 } } }];
+    const top=(id, limit, extra={}) => [
+        { $group: { _id: id, count: { $sum: 1 }, ...extra } },
+        { $match: { _id: { $ne: null } } },
+        { $sort: { count: -1 } },
+        { $limit: limit }
+    ];
+    const distinct=(field) => [{ $group: { _id: field } }, { $count: 'n' }];
+
+    const [r]=await spotsCollection.aggregate([
+        { $match: { timestamp: { $gte: since } } },
+        { $facet: {
+            total: [{ $count: 'n' }],
+            uniqueCalls: distinct('$spotted'),
+            uniqueCountries: distinct('$cty.spotted.data.Country'),
+            uniqueSpotters: distinct('$spotter'),
+            rbn: count('$rbn'),
+            timeline: count(bucket),
+            bandTime: count({ band: '$band', t: bucket }),
+            bands: top('$band', 20),
+            modes: top('$mode', 12),
+            continents: count({ from: '$cty.spotter.data.Continent', to: '$cty.spotted.data.Continent' }),
+            countries: top('$cty.spotted.data.Country', 15, { adif: { $first: '$cty.spotted.data.ADIF' }, continent: { $first: '$cty.spotted.data.Continent' } }),
+            calls: top('$spotted', 15, { country: { $first: '$cty.spotted.data.Country' }, adif: { $first: '$cty.spotted.data.ADIF' }, bands: { $addToSet: '$band' } }),
+            spotters: top('$spotter', 10, { country: { $first: '$cty.spotter.data.Country' }, adif: { $first: '$cty.spotter.data.ADIF' } }),
+            sources: top('$source', 20)
+        } }
+    ], { allowDiskUse: true }).toArray();
+
+    const n=(arr) => arr[0]?.n || 0;
+    const data={
+        minutes,
+        bucketMinutes: ACTIVITY_WINDOWS[minutes],
+        from: since.getTime(),
+        to: now,
+        generatedAt: now,
+        total: n(r.total),
+        uniqueCalls: n(r.uniqueCalls),
+        uniqueCountries: n(r.uniqueCountries),
+        uniqueSpotters: n(r.uniqueSpotters),
+        rbn: r.rbn.find(x => x._id === true)?.count || 0,
+        manual: r.rbn.find(x => x._id !== true)?.count || 0,
+        timeline: r.timeline.map(x => ({ t: x._id, count: x.count })).sort((a, b) => a.t - b.t),
+        bandTime: r.bandTime.map(x => ({ band: x._id.band, t: x._id.t, count: x.count })),
+        bands: r.bands.map(x => ({ name: x._id, count: x.count })),
+        modes: r.modes.map(x => ({ name: x._id, count: x.count })),
+        continents: r.continents.filter(x => x._id.from && x._id.to).map(x => ({ from: x._id.from, to: x._id.to, count: x.count })),
+        countries: r.countries.map(x => ({ name: x._id, count: x.count, adif: x.adif, continent: x.continent })),
+        calls: r.calls.map(x => ({ name: x._id, count: x.count, country: x.country, adif: x.adif, bands: x.bands })),
+        spotters: r.spotters.map(x => ({ name: x._id, count: x.count, country: x.country, adif: x.adif })),
+        sources: r.sources.map(x => ({ name: x._id, count: x.count }))
+    };
+    activityDetailCache.set(minutes, { at: Date.now(), data });
+    return data;
+}
+
 // System status and statistics for /admin
 async function getSystemStatus() {
     const mem = process.memoryUsage();
@@ -815,6 +922,7 @@ async function start() {
     console.log(`🚀 Server running on ${SERVER_HOST}:${SERVER_PORT}`);
     startWsHeartbeat();
     startSpaceWeather();
+    startActivityWarmup();
     syncSources();
 }
 
