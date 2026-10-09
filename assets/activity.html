@@ -98,7 +98,10 @@
 
         /* Horizontal bars */
         .hbar { display: grid; grid-template-columns: 52px 1fr 92px; align-items: center; gap: 10px; padding: 4px 0; }
-        .hbar-label { font-family: 'Cascadia Code', monospace; font-size: 0.8rem; color: #ddd; }
+        .hbar-label { font-family: 'Cascadia Code', monospace; font-size: 0.8rem; color: #ddd; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* Los nombres de origen son largos (p. ej. "FT8 telnet.reversebeacon.net") */
+        #sources .hbar { grid-template-columns: minmax(0, 260px) 1fr 92px; }
+        #sources .hbar-label { font-family: inherit; }
         .hbar-track { height: 14px; position: relative; }
         .hbar-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--series); border-radius: 0 4px 4px 0; min-width: 2px; }
         .hbar-value { font-size: 0.76rem; color: #ddd; text-align: right; white-space: nowrap; }
@@ -136,6 +139,7 @@
             body { padding: 12px 16px; }
             .kpi-value { font-size: 1.35rem; }
             .hbar { grid-template-columns: 44px 1fr 78px; }
+            #sources .hbar { grid-template-columns: minmax(0, 120px) 1fr 78px; }
         }
     </style>
 </head>
