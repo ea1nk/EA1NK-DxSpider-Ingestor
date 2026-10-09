@@ -480,9 +480,8 @@ fastify.decorate("requireAdmin", async (request, reply) => {
 // --- API & WS INSTANCE ---
 fastify.register(async (instance) => {
 
-    instance.get('/monitor', (req, reply) => {
-        return reply.sendFile('spots.html');
-    });
+    // Old monitor page, replaced by the main page
+    instance.get('/monitor', (req, reply) => reply.redirect('/', 301));
 
     instance.get('/activity', (req, reply) => {
         return reply.sendFile('activity.html');
