@@ -66,6 +66,18 @@ Selector de periodo (15 min, 1 h, 6 h, 24 h), actualizado cada minuto:
 - **Mapa de calor mundial** de la densidad de spots, alternando entre estaciones DX y spotters, con zoom (rueda, doble clic o +/−) y arrastre para moverse. Las posiciones usan el locator de la estación de Club Log cuando existe y, si no, las coordenadas CTY de la entidad o del área del prefijo.
 - **Spots por modo**: SSB, CW, FT8, FT4, DIGI (resto de digitales, sin FT8/FT4) y OTROS, con su evolución.
 - **Servicios QSL de las estaciones DX**: porcentaje de estaciones únicas que usan LoTW, eQSL, Club Log y OQRS, y de las que no usan QSL online.
+- **Informes por día y por mes** (cabecera: *Informe → Día / Mes*): la misma página para cualquier día UTC (hora a hora) o mes (día a día), incluidos los días cuyos spots ya han caducado.
+
+#### Resúmenes en los que se basan las estadísticas
+
+Los spots caducan con el TTL y recorrer un día entero de spots es lento en una Raspberry Pi, así que las estadísticas se construyen a partir de resúmenes guardados en MongoDB:
+
+| Colección | Contenido | Se conserva |
+|---|---|---|
+| `stats_hourly`, `stats_hourly_calls` | Cada hora UTC terminada (intervalos de 10 minutos) y sus estaciones únicas | 9 días |
+| `stats_daily`, `stats_daily_calls` | Cada día UTC terminado (intervalos de una hora) y sus estaciones únicas | Siempre (~50 MB al año) |
+
+Las ventanas de 6 h y 24 h y el informe de hoy combinan los resúmenes por hora con la hora en curso; los informes diarios leen el resumen del día y los mensuales combinan sus días. Cada hora se resume en los 5 minutos siguientes a su cierre y cada día justo después de su última hora. En el primer arranque se generan en segundo plano, hora a hora, los resúmenes que falten de los spots que aún estén guardados.
 - Spots en el tiempo, mapa de calor banda × hora (con vista en tabla), bandas y modos, rutas entre continentes (quién escucha a quién), entidades DXCC e indicativos más spoteados, spotters más activos y spots por origen cuando hay varios.
 
 ![Estadísticas de actividad](docs/screenshots/activity.webp)
@@ -187,7 +199,9 @@ curl -H "Authorization: Bearer <token>" \
 ### `GET /api/activity` (público)
 Actividad de spots en los últimos 60 minutos a partir de los spots guardados: `total` y recuentos por `bands`, `modes`, `countries`, indicativos (`calls`) y orígenes (`sources`). Cacheado 60 s.
 
-Con `?detail=1&minutes=15|60|360|1440` devuelve los datos de `/activity`: `timeline`, `bandTime` (banda × intervalo), `continents` (continente del spotter → del DX), recuentos únicos, división RBN/manual, rankings de `countries`/`calls`/`spotters` y `map.spotted` / `map.spotters` (spots por coordenada CTY, longitud positiva al este). Los resultados se cachean (1 min para ≤ 1 h, 5 min en el resto) y las ventanas de 6 h y 24 h se recalculan en segundo plano.
+Con `?detail=1&minutes=15|60|360|1440` devuelve los datos de `/activity`: `timeline`, `bandTime` (banda × intervalo), `continents` (continente del spotter → del DX), recuentos únicos, división RBN/manual, rankings de `countries`/`calls`/`spotters` y `map.spotted` / `map.spotters` (spots por coordenada CTY, longitud positiva al este). Los resultados se cachean (1 min para ≤ 1 h, 5 min en el resto) y las ventanas de 6 h y 24 h se recalculan en segundo plano a partir de los resúmenes por hora.
+
+Con `?day=AAAA-MM-DD` o `?month=AAAA-MM` devuelve el informe de ese día o mes (UTC) en el mismo formato (404 si no hay datos). `GET /api/reports/range` devuelve el primer y el último día disponibles (`firstDay`, `lastDay`).
 
 ### API de administración (`/api/admin/*`, rol `admin`)
 

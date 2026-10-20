@@ -65,6 +65,18 @@ Period selector (15 min, 1 h, 6 h, 24 h), refreshed every minute:
 - **World heatmap** of spot density, switchable between DX stations and spotters, with zoom (wheel, double-click or +/−) and drag to pan. Positions use the station locator from Club Log when known, otherwise the CTY coordinates of the entity or prefix area.
 - **Spots by mode**: SSB, CW, FT8, FT4, DIGI (other digital modes, excluding FT8/FT4) and OTHER, with a trend sparkline.
 - **QSL services of DX stations**: share of unique stations using LoTW, eQSL, Club Log and OQRS, and those with no online QSL.
+- **Day and month reports** (header: *Report → Day / Month*): the same page for any UTC day (hour by hour) or month (day by day), including days whose spots have already expired.
+
+#### Summaries behind the statistics
+
+Spots expire with the TTL, and aggregating a full day of spots is slow on a Raspberry Pi, so statistics are built from summaries stored in MongoDB:
+
+| Collection | Content | Kept |
+|---|---|---|
+| `stats_hourly`, `stats_hourly_calls` | Every finished UTC hour (10-minute buckets) and its unique stations | 9 days |
+| `stats_daily`, `stats_daily_calls` | Every finished UTC day (hourly buckets) and its unique stations | Forever (~50 MB per year) |
+
+The 6 h / 24 h windows and today's report merge the hourly summaries with the current hour; day reports read the daily summary and month reports merge the days. Each hour is summarised within 5 minutes of finishing, and each day right after its last hour. On first start, missing summaries for the spots still stored are generated in the background, one hour at a time.
 - Spots over time, band × time heatmap (with table view), bands and modes, continent-to-continent paths (who hears whom), most spotted DXCC entities and callsigns, most active spotters, and spots per source when there are several.
 
 ![Activity statistics](docs/screenshots/activity.webp)
@@ -186,7 +198,9 @@ Solar indices and propagation data, refreshed every 15 minutes (`SPACE_WEATHER_R
 ### `GET /api/activity` (public)
 Spot activity over the last 60 minutes from stored spots: `total`, and counts by `bands`, `modes`, `countries`, spotted `calls` and `sources`. Cached for 60 s.
 
-With `?detail=1&minutes=15|60|360|1440` it returns the data used by `/activity`: `timeline`, `bandTime` (band × time buckets), `continents` (spotter → DX continent), unique counts, RBN/manual split, top `countries`/`calls`/`spotters`, and `map.spotted` / `map.spotters` (spot counts per CTY coordinate, longitude east-positive). Results are cached (1 min for ≤ 1 h, 5 min otherwise) and the 6 h / 24 h windows are refreshed in the background.
+With `?detail=1&minutes=15|60|360|1440` it returns the data used by `/activity`: `timeline`, `bandTime` (band × time buckets), `continents` (spotter → DX continent), unique counts, RBN/manual split, top `countries`/`calls`/`spotters`, and `map.spotted` / `map.spotters` (spot counts per CTY coordinate, longitude east-positive). Results are cached (1 min for ≤ 1 h, 5 min otherwise) and the 6 h / 24 h windows are refreshed in the background from the hourly summaries.
+
+With `?day=YYYY-MM-DD` or `?month=YYYY-MM` it returns the day/month report (UTC) in the same format (404 when there is no data). `GET /api/reports/range` returns the first and last day available (`firstDay`, `lastDay`).
 
 ### Admin API (`/api/admin/*`, role `admin`)
 

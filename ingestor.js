@@ -832,6 +832,15 @@ function startActivityWarmup() {
 
 async function computeActivityDetail(minutes) {
     const now=Date.now();
+    // 6 h and 24 h are built from the hourly summaries (+ the current hour) instead of
+    // re-reading hundreds of thousands of spots; until those exist, aggregate the spots
+    if (minutes >= 360) {
+        const merged=await reports.getWindow(minutes / 60, ACTIVITY_WINDOWS[minutes]);
+        if (merged) {
+            activityDetailCache.set(minutes, { at: Date.now(), data: merged });
+            return merged;
+        }
+    }
     const data=await aggregateSpots({
         from: new Date(now - minutes * 60 * 1000),
         to: new Date(now),
