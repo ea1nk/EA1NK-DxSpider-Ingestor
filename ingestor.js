@@ -433,6 +433,25 @@ db.open();
 db.seedSourcesFromEnv();
 auth.ensureInitialAdmin();
 
+// --- CORS (opt-in) ---
+// Comma-separated list of origins allowed to call the API from a browser,
+// e.g. CORS_ORIGINS=https://www.example.com,https://example.com. Empty = disabled.
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+if (CORS_ORIGINS.length) {
+    fastify.addHook('onRequest', async (req, reply) => {
+        const origin = req.headers.origin;
+        if (!origin || !CORS_ORIGINS.includes(origin)) return;
+        reply.header('Access-Control-Allow-Origin', origin);
+        reply.header('Vary', 'Origin');
+        if (req.method === 'OPTIONS') {
+            reply.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+            reply.header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+            reply.header('Access-Control-Max-Age', '86400');
+            return reply.code(204).send();
+        }
+    });
+}
+
 fastify.register(jwt, { secret: db.getJwtSecret(), sign: { expiresIn: TOKEN_TTL } });
 fastify.register(fp(async (instance) => { instance.register(websocket); }));
 
