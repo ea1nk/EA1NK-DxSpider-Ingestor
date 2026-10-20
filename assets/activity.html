@@ -136,6 +136,7 @@
         .map-zoom-level { font-size: 0.62rem; color: var(--muted); background: #1a1f2bcc; border-radius: 4px; padding: 1px 4px; }
         .map-marker { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2px solid #fff; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 2px #0008; }
         .map-note { margin-left: auto; }
+        .card h2 .seg + .seg { margin-left: 6px; }
         .card h2 .seg button { font-size: 0.7rem; padding: 4px 9px; text-transform: none; letter-spacing: 0; }
 
         .site-footer { margin-top: 24px; padding: 12px 0 4px; border-top: 1px solid var(--line); text-align: center; color: var(--muted); font-size: 0.72rem; letter-spacing: 0.3px; }
@@ -244,6 +245,10 @@
                     <span class="seg" id="map-switch" role="group">
                         <button type="button" data-who="spotted" data-i18n="av.map.spotted">Estaciones DX</button>
                         <button type="button" data-who="spotters" data-i18n="av.map.spotters">Spotters</button>
+                    </span>
+                    <span class="seg" id="map-layers" role="group">
+                        <button type="button" data-layer="night" data-i18n="av.map.night">Noche</button>
+                        <button type="button" data-layer="routes" data-i18n="av.map.routes">Rutas</button>
                     </span>
                 </h2>
                 <div class="map-wrap" id="map">

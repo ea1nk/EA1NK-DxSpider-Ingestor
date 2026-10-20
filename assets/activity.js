@@ -331,9 +331,14 @@ const MAP_MAX_ZOOM = 8;
 const HEAT_RAMP = [[29, 42, 64, 0], [36, 69, 107, 0.55], [47, 106, 166, 0.75], [77, 163, 255, 0.9], [169, 211, 255, 0.95], [235, 245, 255, 1]];
 let mapWho = 'spotted';
 try { mapWho = localStorage.getItem('dxactivity-map') === 'spotters' ? 'spotters' : 'spotted'; } catch (_) { /* ignore */ }
+// Capas opcionales: zona de noche (con el Sol) y rutas entre continentes
+const mapLayers = { night: true, routes: true };
+try { Object.assign(mapLayers, JSON.parse(localStorage.getItem('dxactivity-map-layers') || '{}')); } catch (_) { /* ignore */ }
+const CONT_CENTROID = { EU: [50, 12], NA: [40, -100], SA: [-15, -60], AF: [5, 20], AS: [40, 90], OC: [-25, 135] };
+let mapSun = null;
 let worldLoaded = null;
 let mapView = { ...MAP_HOME };
-let mapState = { pts: [], max: 1, total: 0 };
+let mapState = { pts: [], max: 1, total: 0, routes: [] };
 let mapPoints = [];
 let mapFrame = null;
 
@@ -389,11 +394,77 @@ function renderMap(d) {
     mapState = {
         pts,
         total: pts.reduce((a, p) => a + p.count, 0),
-        max: Math.max(1, ...pts.map(p => p.count))
+        max: Math.max(1, ...pts.map(p => p.count)),
+        routes: d.continents || []
     };
     $('map-note').textContent = t('av.mapNote', { n: fmtNum(pts.length) });
     $('map-ramp').style.background = `linear-gradient(90deg, ${HEAT_RAMP.slice(1).map(c => `rgb(${c[0]},${c[1]},${c[2]})`).join(',')})`;
     setView(mapView);
+}
+
+// Posición del Sol (declinación y ecuación del tiempo aproximadas, error < 1°)
+function sunPosition(date) {
+    const doy = (date - Date.UTC(date.getUTCFullYear(), 0, 0)) / 864e5;
+    const lat = -23.44 * Math.cos(2 * Math.PI * (doy + 10) / 365);
+    const B = 2 * Math.PI * (doy - 81) / 364;
+    const eot = 9.87 * Math.sin(2 * B) - 7.53 * Math.cos(B) - 1.5 * Math.sin(B); // minutos
+    const h = date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600;
+    const lon = ((-15 * (h + eot / 60 - 12) + 540) % 360) - 180;
+    return { lat, lon };
+}
+
+// Capas bajo el calor: zona nocturna y arcos entre continentes
+function drawMapBackdrop(ctx, project, W, H, dpr) {
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    mapSun = null;
+    if (mapLayers.night && isLivePeriod()) {
+        const sun = sunPosition(new Date());
+        const dec = (Math.abs(sun.lat) < 0.1 ? 0.1 : sun.lat) * Math.PI / 180;
+        const edge = dec > 0 ? H + 20 : -20; // la noche cae al lado opuesto al Sol
+        ctx.beginPath();
+        ctx.moveTo(-10, edge);
+        for (let x = -10; x <= W + 10; x += 3) {
+            // lon a partir de la columna: x = (lon + 180 - view.x) / view.w * W
+            const lon = x / W * mapView.w + mapView.x - 180;
+            const lat = Math.atan(-Math.cos((lon - sun.lon) * Math.PI / 180) / Math.tan(dec)) * 180 / Math.PI;
+            ctx.lineTo(x, project({ lat, lon })[1]);
+        }
+        ctx.lineTo(W + 10, edge);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.38)';
+        ctx.fill();
+        mapSun = { xy: project(sun) };
+    }
+    if (mapLayers.routes && mapState.routes.length) {
+        const rs = mapState.routes.filter(c => c.from !== c.to && CONT_CENTROID[c.from] && CONT_CENTROID[c.to]);
+        const maxc = Math.max(1, ...rs.map(c => c.count));
+        for (const c of rs) {
+            const [la1, lo1] = CONT_CENTROID[c.from], [la2, lo2] = CONT_CENTROID[c.to];
+            const [x1, y1] = project({ lat: la1, lon: lo1 }), [x2, y2] = project({ lat: la2, lon: lo2 });
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.quadraticCurveTo((x1 + x2) / 2, Math.min(y1, y2) - Math.abs(x2 - x1) * 0.18 - 10, x2, y2);
+            ctx.strokeStyle = `rgba(155, 205, 255, ${(0.12 + 0.4 * c.count / maxc).toFixed(2)})`;
+            ctx.lineWidth = 0.6 + 3.2 * Math.sqrt(c.count / maxc);
+            ctx.stroke();
+        }
+    }
+    ctx.restore();
+}
+
+function drawSun(ctx, dpr) {
+    if (!mapSun) return;
+    const [x, y] = mapSun.xy;
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, 2 * Math.PI);
+    ctx.fillStyle = '#ffd25a';
+    ctx.shadowColor = '#ffd25a';
+    ctx.shadowBlur = 14;
+    ctx.fill();
+    ctx.restore();
 }
 
 function drawHeat() {
@@ -416,7 +487,8 @@ function drawHeat() {
     mapPoints = pts.map(p => ({ ...p, xy: project(p) }))
         .filter(p => p.xy[0] > -baseR * 2 && p.xy[0] < W + baseR * 2 && p.xy[1] > -baseR * 2 && p.xy[1] < H + baseR * 2)
         .sort((a, b) => a.count - b.count);
-    if (!mapPoints.length) return;
+    drawMapBackdrop(ctx, project, W, H, dpr);
+    if (!mapPoints.length) { drawSun(ctx, dpr); return; }
 
     // 1) Intensidad en escala de grises (alfa acumulado), 2) coloreado con la rampa azul
     const off = document.createElement('canvas');
@@ -441,13 +513,19 @@ function drawHeat() {
         const [r, g, b, alpha] = heatColor(a);
         px4[i - 3] = r; px4[i - 2] = g; px4[i - 1] = b; px4[i] = Math.round(Math.min(1, alpha * (0.35 + a)) * 255);
     }
-    ctx.putImageData(img, 0, 0);
+    o.putImageData(img, 0, 0);
+    ctx.drawImage(off, 0, 0);
+    drawSun(ctx, dpr);
 }
 
 function mapHover(evt) {
     const canvas = $('map-heat');
     const r = canvas.getBoundingClientRect();
     const mx = evt.clientX - r.left, my = evt.clientY - r.top;
+    if (mapSun) {
+        const dx = mapSun.xy[0] - mx, dy = mapSun.xy[1] - my;
+        if (dx * dx + dy * dy < 100) { $('map-marker').hidden = true; return showTip(evt, esc(t('av.mapSun'))); }
+    }
     let best = null, bestD = 18 * 18;
     for (const p of mapPoints) {
         const dx = p.xy[0] - mx, dy = p.xy[1] - my, dd = dx * dx + dy * dy;
@@ -500,6 +578,13 @@ function setupMapInteraction() {
     $('map-zoom-out').onclick = () => zoomAt(1 / 1.6, ...center());
     $('map-zoom-reset').onclick = () => setView({ ...MAP_HOME });
     ['map-zoom-in', 'map-zoom-out', 'map-zoom-reset'].forEach(id => { $(id).title = t(`av.${id.replace('map-zoom-', 'zoom.')}`); $(id).setAttribute('aria-label', $(id).title); });
+}
+
+function setMapLayer(layer, on) {
+    mapLayers[layer] = on;
+    try { localStorage.setItem('dxactivity-map-layers', JSON.stringify(mapLayers)); } catch (_) { /* ignore */ }
+    document.querySelectorAll('#map-layers button').forEach(b => b.setAttribute('aria-pressed', mapLayers[b.dataset.layer] ? 'true' : 'false'));
+    if (data) renderMap(data);
 }
 
 function setMapWho(who) {
@@ -630,7 +715,10 @@ document.addEventListener('DOMContentLoaded', () => {
     $('window-switch').setAttribute('aria-label', t('av.window'));
     document.querySelectorAll('#window-switch button').forEach(b => { b.onclick = () => setWindow(+b.dataset.min); });
     document.querySelectorAll('#map-switch button').forEach(b => { b.onclick = () => setMapWho(b.dataset.who); });
+    document.querySelectorAll('#map-layers button').forEach(b => { b.onclick = () => setMapLayer(b.dataset.layer, !mapLayers[b.dataset.layer]); });
     setupMapInteraction();
+    setMapLayer('night', mapLayers.night);
+    setMapLayer('routes', mapLayers.routes);
     setMapWho(mapWho);
     setupReports();
     setPeriod(period);
