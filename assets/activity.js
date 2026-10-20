@@ -335,6 +335,8 @@ try { mapWho = localStorage.getItem('dxactivity-map') === 'spotters' ? 'spotters
 const mapLayers = { night: true, routes: true };
 try { Object.assign(mapLayers, JSON.parse(localStorage.getItem('dxactivity-map-layers') || '{}')); } catch (_) { /* ignore */ }
 const CONT_CENTROID = { EU: [50, 12], NA: [40, -100], SA: [-15, -60], AF: [5, 20], AS: [40, 90], OC: [-25, 135] };
+let mapStyle = 'dots';
+try { mapStyle = localStorage.getItem('dxactivity-map-style') === 'heat' ? 'heat' : 'dots'; } catch (_) { /* ignore */ }
 let mapSun = null;
 let worldLoaded = null;
 let mapView = { ...MAP_HOME };
@@ -490,6 +492,25 @@ function drawHeat() {
     drawMapBackdrop(ctx, project, W, H, dpr);
     if (!mapPoints.length) { drawSun(ctx, dpr); return; }
 
+    // Vista de puntos: un círculo por ubicación, con el radio según los spots
+    if (mapStyle === 'dots') {
+        const spotted = mapWho !== 'spotters';
+        const rgb = spotted ? '120, 215, 255' : '255, 255, 255';
+        const k = Math.min(2, Math.sqrt(mapZoom()));
+        ctx.save();
+        ctx.scale(dpr, dpr);
+        ctx.fillStyle = `rgba(${rgb}, 0.78)`;
+        if (spotted) { ctx.shadowColor = `rgba(${rgb}, 0.9)`; ctx.shadowBlur = 8; }
+        for (const p of mapPoints) {
+            ctx.beginPath();
+            ctx.arc(p.xy[0], p.xy[1], (1.6 + 4.6 * Math.sqrt(p.count / max)) * k, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+        ctx.restore();
+        drawSun(ctx, dpr);
+        return;
+    }
+
     // 1) Intensidad en escala de grises (alfa acumulado), 2) coloreado con la rampa azul
     const off = document.createElement('canvas');
     off.width = canvas.width;
@@ -578,6 +599,14 @@ function setupMapInteraction() {
     $('map-zoom-out').onclick = () => zoomAt(1 / 1.6, ...center());
     $('map-zoom-reset').onclick = () => setView({ ...MAP_HOME });
     ['map-zoom-in', 'map-zoom-out', 'map-zoom-reset'].forEach(id => { $(id).title = t(`av.${id.replace('map-zoom-', 'zoom.')}`); $(id).setAttribute('aria-label', $(id).title); });
+}
+
+function setMapStyle(style) {
+    mapStyle = style;
+    try { localStorage.setItem('dxactivity-map-style', style); } catch (_) { /* ignore */ }
+    document.querySelectorAll('#map-style button').forEach(b => b.setAttribute('aria-pressed', b.dataset.style === style ? 'true' : 'false'));
+    $('map').parentElement.querySelector('.legend').classList.toggle('dots', style === 'dots');
+    if (data) renderMap(data);
 }
 
 function setMapLayer(layer, on) {
@@ -715,8 +744,10 @@ document.addEventListener('DOMContentLoaded', () => {
     $('window-switch').setAttribute('aria-label', t('av.window'));
     document.querySelectorAll('#window-switch button').forEach(b => { b.onclick = () => setWindow(+b.dataset.min); });
     document.querySelectorAll('#map-switch button').forEach(b => { b.onclick = () => setMapWho(b.dataset.who); });
+    document.querySelectorAll('#map-style button').forEach(b => { b.onclick = () => setMapStyle(b.dataset.style); });
     document.querySelectorAll('#map-layers button').forEach(b => { b.onclick = () => setMapLayer(b.dataset.layer, !mapLayers[b.dataset.layer]); });
     setupMapInteraction();
+    setMapStyle(mapStyle);
     setMapLayer('night', mapLayers.night);
     setMapLayer('routes', mapLayers.routes);
     setMapWho(mapWho);
