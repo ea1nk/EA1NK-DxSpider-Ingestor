@@ -11,11 +11,19 @@ class ClusterSource {
      * @param {object} config  Source row: { id, name, host, port, callsign, login_commands, backups: [{host, port}] }
      * @param {object} opts    { reconnectDelayMs, connectTimeoutMs, inactivityTimeoutMs, failoverAttempts, primaryCheckMs }
      * @param {function} onLine  async (line, source) => 'new' | 'dup' | null
+     * @param {function} [onEvent]  ({ type, level, message, details }, source) for the audit log:
+     *   connected, disconnected, connectFailed, reconnected, failover, primaryBack, stopped.
+     *   A source is up once a session delivers spots (a cluster may accept the TCP connection and
+     *   close it right away), and an outage gives one disconnected/connectFailed and one
+     *   reconnected, however many retries.
      */
-    constructor(config, opts, onLine) {
+    constructor(config, opts, onLine, onEvent = () => {}) {
         this.config = config;
         this.opts = opts;
         this.onLine = onLine;
+        this.onEvent = onEvent;
+        this.upSince = null; // receiving spots since
+        this.outage = null; // { since, attempts, failovers } while the source cannot get spots
         this.nodes = [
             { name: 'principal', host: config.host, port: config.port },
             ...config.backups.map((b, i) => ({ name: `respaldo ${i + 1}`, host: b.host, port: b.port }))
@@ -40,6 +48,10 @@ class ClusterSource {
     }
 
     log(msg) { console.log(`[${this.config.name}] ${msg}`); }
+    emit(type, level, message, details = {}) {
+        try { this.onEvent({ type, level, message, details }, this); } catch (_) { /* ignore */ }
+    }
+    nodeInfo(node = this.nodes[this.activeNode]) { return { node: node.name, host: node.host, port: node.port }; }
     warn(msg) { console.warn(`[${this.config.name}] ${msg}`); }
 
     start() {
@@ -60,6 +72,10 @@ class ClusterSource {
         this.primaryTimer = null;
         const s = this.socket;
         this.socket = null;
+        const outage = this.outage;
+        this.outage = null;
+        this.upSince = null;
+        this.emit('stopped', 'info', 'Session stopped', outage ? { downMs: Date.now() - outage.since, attempts: outage.attempts } : {});
         this.setDisconnected();
         ClusterSource.closeSocket(s);
     }
@@ -104,9 +120,13 @@ class ClusterSource {
         this.failures++;
         if (this.nodes.length < 2 || this.failures < this.opts.failoverAttempts) return;
         this.failures = 0;
+        const from = this.nodes[this.activeNode];
         this.activeNode = (this.activeNode + 1) % this.nodes.length;
         const node = this.nodes[this.activeNode];
         this.warn(`⚠️ Cambiando al nodo ${node.name} (${node.host}:${node.port})`);
+        // With every node down this cycles every few attempts: only the first change of an outage is recorded
+        if (this.outage && this.outage.failovers++) return;
+        this.emit('failover', 'warning', `Switched to node ${node.name} (${node.host}:${node.port})`, { from: from.name, ...this.nodeInfo(node) });
     }
 
     probe(node) {
@@ -125,6 +145,7 @@ class ClusterSource {
         if (!(await this.probe(this.nodes[0]))) return;
         if (this.activeNode === 0 || this.stopped) return;
         this.log(`✅ Nodo principal disponible de nuevo, volviendo a ${this.nodes[0].host}:${this.nodes[0].port}`);
+        this.emit('primaryBack', 'info', `Primary node available again (${this.nodes[0].host}:${this.nodes[0].port})`, this.nodeInfo(this.nodes[0]));
         this.activeNode = 0;
         this.failures = 0;
         this.reconnect();
@@ -147,6 +168,7 @@ class ClusterSource {
         let loginLines = 0;
         let connected = false;
         let gotSpot = false;
+        const attemptAt = Date.now();
 
         telnet.setKeepAlive(true, 60000); // Detect dead connections at TCP level
         telnet.setTimeout(this.opts.connectTimeoutMs); // Connect timeout; becomes inactivity timeout once connected
@@ -196,6 +218,7 @@ class ClusterSource {
                 }
                 try {
                     const result = await this.onLine(line, this);
+                    if ((result === 'new' || result === 'dup') && !gotSpot) this.markUp(node);
                     if (result === 'new') {
                         gotSpot = true;
                         this.stats.spots++;
@@ -215,12 +238,36 @@ class ClusterSource {
             this.socket = null;
             this.setDisconnected();
             if (this.stopped) return;
+            const reason = this.stats.lastErrorAt >= attemptAt ? this.stats.lastError : null;
+            if (this.upSince !== null) {
+                this.emit('disconnected', 'warning', `Disconnected from ${node.name}${reason ? `: ${reason}` : ''}`, { ...this.nodeInfo(node), upMs: Date.now() - this.upSince, reason });
+                this.upSince = null;
+                this.outage = { since: Date.now(), attempts: 0, failovers: 0 };
+            } else if (!this.outage) {
+                this.emit('connectFailed', 'warning', `Could not connect to ${node.name} (${node.host}:${node.port})${reason ? `: ${reason}` : ''}`, { ...this.nodeInfo(node), reason });
+                this.outage = { since: attemptAt, attempts: 1, failovers: 0 };
+            } else {
+                this.outage.attempts++;
+            }
             // A session that received spots does not count as a failure
             if (gotSpot) this.failures = 0;
             else this.registerFailure();
             this.warn(`Conexión cerrada, reconectando en ${this.opts.reconnectDelayMs / 1000}s...`);
             this.scheduleReconnect();
         });
+    }
+
+    // First spot of a session: the source is up (again)
+    markUp(node) {
+        if (this.upSince !== null) return;
+        this.upSince = Date.now();
+        if (this.outage) {
+            const { since, attempts, failovers } = this.outage;
+            this.outage = null;
+            this.emit('reconnected', 'info', `Reconnected to ${node.name} (${node.host}:${node.port})`, { ...this.nodeInfo(node), downMs: this.upSince - since, attempts, failovers });
+        } else {
+            this.emit('connected', 'info', `Connected to ${node.name} (${node.host}:${node.port})`, this.nodeInfo(node));
+        }
     }
 
     status() {

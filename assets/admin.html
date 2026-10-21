@@ -98,6 +98,45 @@
         td.share { width: 30%; min-width: 80px; }
         .flag { width: 18px; height: 12px; object-fit: cover; vertical-align: -1px; margin-right: 6px; border-radius: 2px; display: inline-block; }
         .matrix td.num { min-width: 52px; }
+        .report-controls .report-audit { width: auto; align-self: center; padding-bottom: 6px; }
+        .report-form .hint + .hint { margin-top: 4px; }
+        .nowrap { white-space: nowrap; }
+        .card h2 .actions { gap: 6px; }
+
+        /* Anillos: cinco colores categóricos en orden fijo + «Otros» en gris */
+        :root { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s-other: #5c6070; }
+        .donut-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin-bottom: 10px; }
+        .donut { width: 128px; height: 128px; flex: none; }
+        .donut .slice { stroke: var(--card); stroke-width: 2px; }
+        .donut circle.slice { stroke-width: 22px; }
+        .donut .slice:hover { opacity: 0.8; }
+        .slice.s1 { fill: var(--s1); } .slice.s2 { fill: var(--s2); } .slice.s3 { fill: var(--s3); } .slice.s4 { fill: var(--s4); } .slice.s5 { fill: var(--s5); } .slice.other { fill: var(--s-other); }
+        circle.slice.s1 { stroke: var(--s1); fill: none; } circle.slice.s2 { stroke: var(--s2); fill: none; } circle.slice.s3 { stroke: var(--s3); fill: none; } circle.slice.s4 { stroke: var(--s4); fill: none; } circle.slice.s5 { stroke: var(--s5); fill: none; } circle.slice.other { stroke: var(--s-other); fill: none; }
+        .donut-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 0.78rem; min-width: 150px; flex: 1; }
+        .donut-legend li { display: flex; align-items: center; gap: 8px; }
+        .donut-legend .lg-name { flex: 1; }
+        .donut-legend .lg-val { color: var(--muted); font-variant-numeric: tabular-nums; }
+        .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+        .sw.s1 { background: var(--s1); } .sw.s2 { background: var(--s2); } .sw.s3 { background: var(--s3); } .sw.s4 { background: var(--s4); } .sw.s5 { background: var(--s5); } .sw.other { background: var(--s-other); }
+
+        /* Mapa del informe */
+        .report-map { width: 100%; aspect-ratio: 360 / 145; background: #121620; border-radius: 8px; overflow: hidden; margin-bottom: 6px; }
+        .world { width: 100%; height: 100%; display: block; }
+        .world .land { fill: #232a3a; }
+        .world .borders { fill: none; stroke: #343c51; stroke-width: 0.6px; vector-effect: non-scaling-stroke; }
+        .world .graticule { fill: none; stroke: #1b2130; stroke-width: 1px; vector-effect: non-scaling-stroke; }
+        .world .route { fill: none; stroke: rgb(155, 205, 255); vector-effect: non-scaling-stroke; }
+        .world .dot { fill: rgba(120, 215, 255, 0.75); stroke: #121620; stroke-width: 0.5px; vector-effect: non-scaling-stroke; }
+        .world .dot.spotters { fill: rgba(255, 255, 255, 0.75); }
+        .world .dot:hover { fill: #fff; }
+
+        /* Auditoría */
+        .audit-head { margin-top: 10px; border-color: color-mix(in srgb, var(--warning) 30%, #262938); }
+        .audit-filters select { width: auto; padding: 4px 8px; font-size: 0.78rem; }
+        .audit-filters .check { font-size: 0.78rem; text-transform: none; letter-spacing: 0; font-weight: normal; color: var(--text); }
+        .audit-table td { font-size: 0.78rem; }
+        .audit-table tr.lv-error td:last-child { color: #ff9b9b; }
+        .audit-table tr.lv-warning td:last-child { color: #ffd27a; }
 
         @media print {
             :root { --bg: #fff; --card: #fff; --card-2: #fff; --text: #111; --muted: #555; --line: #d4d4d8; --series: #2563eb; }
@@ -108,6 +147,18 @@
             .card h2 { color: #333; }
             .tile-value, .report-head h3, td b { color: #111; }
             .chart .grid { stroke: #e4e4e7; }
+            :root { --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s-other: #a1a1aa; }
+            .report-map { background: #f4f6fa; }
+            .world .land { fill: #dde3ec; }
+            .world .borders { stroke: #fff; }
+            .world .graticule { stroke: #e9edf3; }
+            .world .route { stroke: #2563eb; }
+            .world .dot { fill: rgba(37, 99, 235, 0.7); stroke: #fff; }
+            .world .dot.spotters { fill: rgba(17, 17, 17, 0.6); }
+            .card h2 .actions, .audit-filters { display: none !important; }
+            .audit-table tr.lv-error td:last-child { color: #b91c1c; }
+            .audit-table tr.lv-warning td:last-child { color: #92400e; }
+            .chip { color: #111; }
             .grid-2 { grid-template-columns: 1fr 1fr; }
             a { color: inherit; text-decoration: none; }
         }
@@ -323,12 +374,14 @@
                     <label data-for="month"><span data-i18n="rep.month">Mes</span><input type="month" name="month" placeholder="AAAA-MM"></label>
                     <label data-for="range"><span data-i18n="rpt.from">Desde</span><input type="date" name="from"></label>
                     <label data-for="range"><span data-i18n="rpt.to">Hasta</span><input type="date" name="to"></label>
+                    <label class="check report-audit"><input type="checkbox" id="report-audit"><span data-i18n="rpt.withAudit">Incluir auditoría</span></label>
                     <div class="actions">
                         <button class="btn primary" type="submit" id="report-go" data-i18n="rpt.go">Generar</button>
                         <button class="btn" type="button" id="report-print" disabled data-i18n="rpt.print">Imprimir / PDF</button>
                     </div>
                 </div>
                 <span class="hint" id="report-hint"></span>
+                <span class="hint" data-i18n="rpt.auditHint"></span>
                 <div id="report-msg" class="msg error" hidden></div>
             </form>
             <div id="report-out" class="stack" hidden></div>
@@ -397,7 +450,7 @@
 
     <div id="toast" class="toast" hidden></div>
 
-    <script src="i18n.js?v=20261021a"></script>
-    <script src="admin.js?v=20261021a"></script>
+    <script src="i18n.js?v=20261021b"></script>
+    <script src="admin.js?v=20261021b"></script>
 </body>
 </html>

@@ -17,6 +17,7 @@ const referenceData=require('./referenceData');
 const { createReports, REPORT_MAX_DAYS }=require('./reports');
 const { startSpaceWeather, getSpaceWeather }=require('./spaceWeather');
 const db=require('./db');
+const { createAudit }=require('./audit');
 const auth=require('./auth');
 const ClusterSource=require('./clusterSource');
 const path = require('path');
@@ -302,16 +303,30 @@ function cleanupCache(now) {
     }
 }
 
+// While MongoDB rejects writes: { since, dropped } (one audit event when it starts and one when it ends)
+let mongoFailing=null;
+
 async function flushBuffer() {
     if (!spotsCollection||buffer.length===0) return;
     const batch=[...buffer];
     buffer=[];
-    try { await spotsCollection.insertMany(batch); }
+    try {
+        await spotsCollection.insertMany(batch);
+        if (mongoFailing) {
+            audit.record('database', 'writeRecovered', 'info', 'MongoDB writes working again', { details: { downMs: Date.now() - mongoFailing.since, dropped: mongoFailing.dropped } });
+            mongoFailing=null;
+        }
+    }
     catch (error) {
         buffer=batch.concat(buffer);
+        if (!mongoFailing) {
+            mongoFailing={ since: Date.now(), dropped: 0 };
+            audit.record('database', 'writeFailed', 'error', `MongoDB write failed: ${error.message}`, { details: { error: error.message } });
+        }
         // Keep memory bounded while MongoDB is down: drop the oldest spots
         if (buffer.length>MAX_BUFFER) {
             console.warn(`Buffer full, dropping ${buffer.length-MAX_BUFFER} oldest spots`);
+            mongoFailing.dropped += buffer.length-MAX_BUFFER;
             buffer=buffer.slice(-MAX_BUFFER);
         }
         console.error('DB Flush Error:', error.message);
@@ -378,11 +393,15 @@ function syncSources() {
     }
     for (const row of rows) {
         if (sources.has(row.id)) continue;
-        const src = new ClusterSource(row, SOURCE_OPTS, handleDxLine);
+        const src = new ClusterSource(row, SOURCE_OPTS, handleDxLine, auditSourceEvent);
         sources.set(row.id, src);
         // Give a restarted session time to send 'bye' before logging in again with the same callsign
         setTimeout(() => { if (sources.get(row.id) === src && !shuttingDown) src.start(); }, 3000).unref();
     }
+}
+
+function auditSourceEvent(ev, src) {
+    audit.record('source', ev.type, ev.level, ev.message, { subject: src.config.name, details: { ...ev.details, sourceId: src.config.id } });
 }
 
 function clusterSummary() {
@@ -430,6 +449,7 @@ function validateSource(body) {
 
 // --- FASTIFY SETUP ---
 db.open();
+const audit=createAudit(db);
 db.seedSourcesFromEnv();
 auth.ensureInitialAdmin();
 
@@ -542,7 +562,12 @@ fastify.register(async (instance) => {
     // Legacy: { password } alone matching API_PASSWORD still returns a read-only API token.
     instance.post('/login', async (req, reply) => {
         const ip = req.ip;
-        if (auth.isRateLimited(ip)) return reply.code(429).send({ error: 'Too many failed attempts, try again later' });
+        if (auth.isRateLimited(ip)) {
+            audit.record('auth', 'loginBlocked', 'warning', `Too many failed logins from ${ip}`, { details: { ip }, throttle: ip, throttleMs: 15 * 60 * 1000 });
+            return reply.code(429).send({ error: 'Too many failed attempts, try again later' });
+        }
+        // One event per IP and user every 15 minutes, so a password-guessing run cannot fill the log
+        const loginFailed = (name) => audit.record('auth', 'loginFailed', 'warning', `Failed login${name ? ` for ${name}` : ''} from ${ip}`, { subject: name || null, details: { ip, username: name || null }, throttle: `${ip}|${name}`, throttleMs: 15 * 60 * 1000 });
         const { username, password } = req.body || {};
         if (typeof password !== 'string' || !password) return reply.code(400).send({ error: 'Missing credentials' });
 
@@ -551,16 +576,19 @@ fastify.register(async (instance) => {
                 return { token: instance.jwt.sign({ user: 'api', role: 'user', legacy: true }) };
             }
             auth.registerFailedLogin(ip);
+            loginFailed(null);
             return reply.code(401).send({ error: 'Invalid credentials' });
         }
 
         const user = db.getUserWithHash(String(username));
         if (!user || !auth.verifyPassword(password, user.password_hash)) {
             auth.registerFailedLogin(ip);
+            loginFailed(String(username).slice(0, 40));
             return reply.code(401).send({ error: 'Invalid credentials' });
         }
         auth.clearFailedLogins(ip);
         db.touchLogin(user.id);
+        audit.record('auth', 'loginOk', 'info', `${user.username} signed in from ${ip}`, { subject: user.username, details: { ip, role: user.role } });
         return {
             token: instance.jwt.sign({ sub: user.id, username: user.username, role: user.role }),
             user: { id: user.id, username: user.username, role: user.role }
@@ -579,6 +607,7 @@ fastify.register(async (instance) => {
         const err = auth.validateCredentials(null, String(newPassword || ''), { requireUsername: false });
         if (err) return reply.code(400).send({ error: err });
         db.updateUser(user.id, { passwordHash: auth.hashPassword(String(newPassword)) });
+        audit.record('admin', 'passwordChanged', 'info', `${user.username} changed their password`, { subject: user.username });
         return { ok: true };
     });
 
@@ -645,18 +674,30 @@ fastify.register(async (instance) => {
 
         admin.get('/status', async () => getSystemStatus());
 
-        // Report for whole UTC days: ?from=YYYY-MM-DD&to=YYYY-MM-DD (both included)
-        admin.get('/reports', async (req, reply) => {
-            const { from, to } = req.query;
+        // Whole UTC days: ?from=YYYY-MM-DD&to=YYYY-MM-DD (both included); returns { from, to } or { error }
+        const parsePeriod = ({ from, to }) => {
             const valid = (d) => {
                 const ts = /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? Date.parse(`${d}T00:00:00Z`) : NaN;
                 return !Number.isNaN(ts) && new Date(ts).toISOString().startsWith(d);
             };
-            if (!valid(from) || !valid(to)) return reply.code(400).send({ error: 'from and to must be YYYY-MM-DD' });
-            if (from > to) return reply.code(400).send({ error: 'from must not be after to' });
+            if (!valid(from) || !valid(to)) return { error: 'from and to must be YYYY-MM-DD' };
+            if (from > to) return { error: 'from must not be after to' };
             const days = (Date.parse(to) - Date.parse(from)) / 86400000 + 1;
-            if (days > REPORT_MAX_DAYS) return reply.code(400).send({ error: `The range cannot be longer than ${REPORT_MAX_DAYS} days` });
-            return (await reports.getReport(from, to)) || reply.code(404).send({ error: 'No data for this period' });
+            if (days > REPORT_MAX_DAYS) return { error: `The range cannot be longer than ${REPORT_MAX_DAYS} days` };
+            return { from, to };
+        };
+
+        admin.get('/reports', async (req, reply) => {
+            const p = parsePeriod(req.query);
+            if (p.error) return reply.code(400).send({ error: p.error });
+            return (await reports.getReport(p.from, p.to)) || reply.code(404).send({ error: 'No data for this period' });
+        });
+
+        // Audit log of the same period: events, and downtime of each source and of the ingestor
+        admin.get('/audit', async (req, reply) => {
+            const p = parsePeriod(req.query);
+            if (p.error) return reply.code(400).send({ error: p.error });
+            return audit.report(Date.parse(`${p.from}T00:00:00Z`), Date.parse(`${p.to}T00:00:00Z`) + 86400000);
         });
 
         // Spot retention (TTL). The preview tells how many spots a shorter retention would delete.
@@ -681,12 +722,14 @@ fastify.register(async (instance) => {
             await ensureTtlIndex(seconds);
             db.setSetting('ttl_seconds', seconds);
             console.log(`Spot retention set to ${days} days from /admin by ${req.user.username}`);
+            audit.record('admin', 'ttlChanged', 'info', `Spot retention set to ${days} days`, { subject: req.user.username, details: { days } });
             return getTtlSetting();
         });
 
         // Reference data (CTY, LoTW, eQSL, Club Log): force an update now
         admin.post('/reference/update', async (req, reply) => {
             referenceData.updateAll({ force: true }).catch(err => console.error('Reference update failed:', err.message));
+            audit.record('admin', 'referenceUpdate', 'info', 'Reference data update requested', { subject: req.user.username });
             return reply.code(202).send({ ok: true });
         });
 
@@ -700,23 +743,29 @@ fastify.register(async (instance) => {
             const { value, error } = validateSource(req.body || {});
             if (error) return reply.code(400).send({ error });
             const created = db.createSource(value);
+            audit.record('admin', 'sourceCreated', 'info', `Source ${created.name} created`, { subject: req.user.username, details: { name: created.name, host: created.host, port: created.port, enabled: created.enabled } });
             syncSources();
             return reply.code(201).send(created);
         });
 
         admin.put('/sources/:id', async (req, reply) => {
             const id = parseInt(req.params.id, 10);
-            if (!db.getSource(id)) return reply.code(404).send({ error: 'Not found' });
+            const before = db.getSource(id);
+            if (!before) return reply.code(404).send({ error: 'Not found' });
             const { value, error } = validateSource(req.body || {});
             if (error) return reply.code(400).send({ error });
             const updated = db.updateSource(id, value);
+            const type = before.enabled === updated.enabled ? 'sourceUpdated' : updated.enabled ? 'sourceEnabled' : 'sourceDisabled';
+            audit.record('admin', type, 'info', `Source ${updated.name}: ${type}`, { subject: req.user.username, details: { name: updated.name, host: updated.host, port: updated.port, enabled: updated.enabled } });
             syncSources();
             return updated;
         });
 
         admin.delete('/sources/:id', async (req, reply) => {
             const id = parseInt(req.params.id, 10);
+            const gone = db.getSource(id);
             if (!db.deleteSource(id)) return reply.code(404).send({ error: 'Not found' });
+            audit.record('admin', 'sourceDeleted', 'info', `Source ${gone.name} deleted`, { subject: req.user.username, details: { name: gone.name } });
             syncSources();
             return { ok: true };
         });
@@ -725,6 +774,7 @@ fastify.register(async (instance) => {
             const src = sources.get(parseInt(req.params.id, 10));
             if (!src) return reply.code(404).send({ error: 'Source is not running' });
             src.reconnect();
+            audit.record('admin', 'sourceReconnect', 'info', `Source ${src.config.name} reconnected`, { subject: req.user.username, details: { name: src.config.name } });
             return { ok: true };
         });
 
@@ -737,7 +787,9 @@ fastify.register(async (instance) => {
             if (err) return reply.code(400).send({ error: err });
             if (!['admin', 'user'].includes(role)) return reply.code(400).send({ error: 'Invalid role' });
             if (db.getUserWithHash(username)) return reply.code(409).send({ error: 'Username already exists' });
-            return reply.code(201).send(db.createUser({ username, passwordHash: auth.hashPassword(String(password)), role }));
+            const created = db.createUser({ username, passwordHash: auth.hashPassword(String(password)), role });
+            audit.record('admin', 'userCreated', 'info', `User ${created.username} created (${role})`, { subject: req.user.username, details: { name: created.username, role } });
+            return reply.code(201).send(created);
         });
 
         admin.put('/users/:id', async (req, reply) => {
@@ -754,7 +806,10 @@ fastify.register(async (instance) => {
                 const err = auth.validateCredentials(null, String(password), { requireUsername: false });
                 if (err) return reply.code(400).send({ error: err });
             }
-            return db.updateUser(id, { role, passwordHash: password ? auth.hashPassword(String(password)) : null });
+            const updated = db.updateUser(id, { role, passwordHash: password ? auth.hashPassword(String(password)) : null });
+            if (role && role !== user.role) audit.record('admin', 'userRole', 'info', `User ${user.username} is now ${role}`, { subject: req.user.username, details: { name: user.username, role } });
+            if (password) audit.record('admin', 'userPassword', 'info', `Password of ${user.username} changed`, { subject: req.user.username, details: { name: user.username } });
+            return updated;
         });
 
         admin.delete('/users/:id', async (req, reply) => {
@@ -764,6 +819,7 @@ fastify.register(async (instance) => {
             if (id === req.user.sub) return reply.code(400).send({ error: 'You cannot delete your own user' });
             if (user.role === 'admin' && db.countAdmins() <= 1) return reply.code(400).send({ error: 'Cannot remove the last administrator' });
             db.deleteUser(id);
+            audit.record('admin', 'userDeleted', 'info', `User ${user.username} deleted`, { subject: req.user.username, details: { name: user.username } });
             return { ok: true };
         });
     }, { prefix: '/api/admin' });
@@ -1121,17 +1177,21 @@ async function getStorageInfo() {
 
 // --- START ---
 async function start() {
+    audit.start();
     await connectMongo();
     spotsCollection=mongoClient.db(DB_NAME).collection(COLLECTION_NAME);
     await spotsCollection.createIndex({ timestamp: -1 });
     await ensureTtlIndex();
-    reports=createReports({ mongoDb: mongoClient.db(DB_NAME), spots: spotsCollection, aggregateSpots });
+    reports=createReports({
+        mongoDb: mongoClient.db(DB_NAME), spots: spotsCollection, aggregateSpots,
+        onError: (kind, err) => audit.record('reports', 'summaryFailed', 'error', `${kind} summary failed: ${err.message}`, { details: { kind, error: err.message }, throttle: kind })
+    });
 
     scheduleBufferFlush();
     await fastify.listen({ port: SERVER_PORT, host: SERVER_HOST });
     console.log(`🚀 Server running on ${SERVER_HOST}:${SERVER_PORT}`);
     startWsHeartbeat();
-    startSpaceWeather();
+    startSpaceWeather((ev) => audit.record('spaceWeather', ev.type, ev.level, ev.message, { subject: ev.details.source, details: ev.details }));
     startActivityWarmup();
     reports.start();
     // Weekly refresh of CTY, LoTW, eQSL and Club Log data; reload right after each update
@@ -1139,7 +1199,7 @@ async function start() {
     referenceData.startReferenceUpdates((key) => {
         reloadReferenceData(key);
         preloadReferenceData();
-    });
+    }, (ev) => audit.record('reference', ev.type, ev.level, ev.message, { subject: ev.details.dataset, details: ev.details }));
     syncSources();
 }
 
@@ -1150,6 +1210,7 @@ async function shutdown(signal) {
     console.log(`${signal} recibido, cerrando...`);
     for (const s of sources.values()) s.stop();
     try { await flushBuffer(); } catch (_) { /* ignore */ }
+    audit.stop(signal);
     setTimeout(() => process.exit(0), 1000);
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
@@ -1158,5 +1219,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 start().catch((err) => {
     // Exit so Docker restarts the container instead of leaving it half started
     console.error('Startup failed:', err);
+    audit.record('system', 'startFailed', 'error', `Startup failed: ${err.message}`, { details: { error: err.message } });
+    audit.stop('startup failure');
     process.exit(1);
 });

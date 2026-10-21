@@ -43,6 +43,17 @@ function open() {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS audit_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            type TEXT NOT NULL,
+            level TEXT NOT NULL CHECK (level IN ('info', 'warning', 'error')),
+            subject TEXT,
+            message TEXT NOT NULL,
+            details TEXT
+        );
+        CREATE INDEX IF NOT EXISTS audit_events_ts ON audit_events (ts);
     `);
     return db;
 }
@@ -104,6 +115,26 @@ function updateSource(id, s) {
 
 const deleteSource = (id) => db.prepare('DELETE FROM sources WHERE id = ?').run(id).changes > 0;
 
+// --- Audit events (ts in ms; details stored as JSON) ---
+function rowToEvent(r) {
+    let details = null;
+    try { details = r.details ? JSON.parse(r.details) : null; } catch (_) { /* ignore */ }
+    return { ...r, details };
+}
+
+function addAuditEvent({ ts, category, type, level, subject, message, details }) {
+    db.prepare('INSERT INTO audit_events (ts, category, type, level, subject, message, details) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(ts, category, type, level, subject ?? null, message, details ? JSON.stringify(details) : null);
+}
+
+// Newest first, at most `limit` events in [from, to)
+const listAuditEvents = (from, to, limit) => db.prepare('SELECT * FROM audit_events WHERE ts >= ? AND ts < ? ORDER BY ts DESC, id DESC LIMIT ?').all(from, to, limit).map(rowToEvent);
+const countAuditEvents = (from, to) => db.prepare('SELECT category, level, COUNT(*) AS n FROM audit_events WHERE ts >= ? AND ts < ? GROUP BY category, level').all(from, to);
+// Oldest first: the events that open or close outages, up to `to`
+const auditTimeline = (to, categories) => db.prepare(`SELECT * FROM audit_events WHERE ts < ? AND category IN (${categories.map(() => '?').join(', ')}) ORDER BY ts, id`).all(to, ...categories).map(rowToEvent);
+const firstAuditTs = () => db.prepare('SELECT MIN(ts) AS ts FROM audit_events').get().ts ?? null;
+const pruneAuditEvents = (before) => db.prepare('DELETE FROM audit_events WHERE ts < ?').run(before).changes;
+
 // First run: import the cluster configured in .env so existing installs keep working
 function seedSourcesFromEnv() {
     if (db.prepare('SELECT COUNT(*) AS n FROM sources').get().n > 0) return;
@@ -145,5 +176,6 @@ function getJwtSecret() {
 module.exports = {
     DB_FILE, open, getSetting, setSetting, getJwtSecret,
     listUsers, getUser, getUserWithHash, countAdmins, countUsers, createUser, updateUser, deleteUser, touchLogin,
-    listSources, getSource, createSource, updateSource, deleteSource, seedSourcesFromEnv
+    listSources, getSource, createSource, updateSource, deleteSource, seedSourcesFromEnv,
+    addAuditEvent, listAuditEvents, countAuditEvents, auditTimeline, firstAuditTs, pruneAuditEvents
 };

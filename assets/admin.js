@@ -229,7 +229,7 @@ function renderStatusSources(list, byHour) {
 }
 
 function renderStatusData(sources) {
-    const names = { hamqsl: 'N0NBH / HamQSL', kp: 'NOAA Kp', xray: 'GOES X-ray', windSpeed: 'NOAA solar wind', windMag: 'NOAA IMF', scales: 'NOAA scales', daily: 'NOAA daily indices' };
+    const names = SW_NAMES;
     const rows = Object.entries(sources || {});
     $('status-data').innerHTML = rows.length ? `<table>
         <thead><tr><th>${esc(t('st.col.source'))}</th><th>${esc(t('st.col.status'))}</th><th>${esc(t('st.col.updated'))}</th></tr></thead>
@@ -505,6 +505,11 @@ $('report-type').onclick = (e) => {
     if (b) setReportType(b.dataset.type);
 };
 
+// La auditoría se recuerda entre visitas
+const AUDIT_KEY = 'dxadmin-report-audit';
+try { $('report-audit').checked = localStorage.getItem(AUDIT_KEY) === '1'; } catch (_) { /* ignore */ }
+$('report-audit').onchange = () => { try { localStorage.setItem(AUDIT_KEY, $('report-audit').checked ? '1' : '0'); } catch (_) { /* ignore */ } };
+
 $('report-form').onsubmit = async (e) => {
     e.preventDefault();
     if (reportBusy) return;
@@ -513,14 +518,23 @@ $('report-form').onsubmit = async (e) => {
     if (p.error) return showMsg(msg, p.error);
     // El mes en curso se recorta a hoy; el servidor también lo hace
     const to = reportRange && p.to > reportRange.lastDay ? reportRange.lastDay : p.to;
+    const withAudit = $('report-audit').checked;
     showMsg(msg, '');
     reportBusy = true;
     $('report-go').disabled = true;
     $('report-go').textContent = t('rpt.generating');
     try {
-        reportData = await api('GET', `/api/admin/reports?from=${p.from}&to=${to}`);
+        const qs = `from=${p.from}&to=${to}`;
+        const [spots, audit] = await Promise.allSettled([
+            api('GET', `/api/admin/reports?${qs}`),
+            withAudit ? api('GET', `/api/admin/audit?${qs}`) : Promise.resolve(null)
+        ]);
+        // Sin spots (404) el informe puede mostrar solo la auditoría
+        if (spots.status === 'rejected' && (spots.reason.status !== 404 || !audit.value)) throw spots.reason;
+        if (audit.status === 'rejected') throw audit.reason;
+        reportData = spots.value || null;
         reportTitle = periodTitle(p);
-        renderReport(reportData, reportTitle, p);
+        await renderReport(reportData, reportTitle, audit.value);
         $('report-print').disabled = false;
     } catch (err) {
         reportData = null;
@@ -562,15 +576,115 @@ function fullTimeline(d) {
     return out;
 }
 
-function renderReport(d, title, p) {
-    const out = $('report-out');
+// --- Gráficos de anillo (reparto de un total) ---
+// Cinco colores categóricos en orden fijo (validados contra el fondo, oscuro y de impresión)
+// y el resto agrupado en «Otros» en gris; la leyenda lleva siempre nombre y porcentaje
+const DONUT_SLOTS = 5;
+
+function donut(items, { label = (x) => x.name, total: totalIn, aria } = {}) {
+    const sorted = [...items].filter(x => x.count > 0).sort((a, b) => b.count - a.count);
+    const total = totalIn ?? sorted.reduce((a, x) => a + x.count, 0);
+    if (!total || !sorted.length) return '';
+    let slices = sorted.slice(0, DONUT_SLOTS).map((x, i) => ({ label: label(x), count: x.count, cls: `s${i + 1}` }));
+    const rest = total - slices.reduce((a, s) => a + s.count, 0);
+    if (rest > 0) slices.push({ label: t('act.other'), count: rest, cls: 'other' });
+    const R = 60, r = 38, C = 64;
+    const pt = (a, rad) => `${(C + rad * Math.sin(a)).toFixed(2)},${(C - rad * Math.cos(a)).toFixed(2)}`;
+    let a0 = 0;
+    const paths = slices.map((s, i) => {
+        const frac = s.count / total;
+        const tipHtml = `<b>${esc(s.label)}</b><br>${esc(t('av.mapTip', { n: fmtNum(s.count), pct: fmtPct(s.count, total) }))}`;
+        if (frac >= 0.9999) return `<circle class="slice ${s.cls}" cx="${C}" cy="${C}" r="${(R + r) / 2}" fill="none" stroke-width="${R - r}" data-tip="${esc(tipHtml)}"/>`;
+        const a1 = a0 + frac * 2 * Math.PI;
+        const large = a1 - a0 > Math.PI ? 1 : 0;
+        const d = `M${pt(a0, R)}A${R},${R} 0 ${large} 1 ${pt(a1, R)}L${pt(a1, r)}A${r},${r} 0 ${large} 0 ${pt(a0, r)}Z`;
+        a0 = a1;
+        return `<path class="slice ${s.cls}" d="${d}" data-tip="${esc(tipHtml)}" data-i="${i}"/>`;
+    }).join('');
+    return `<div class="donut-row">
+        <svg class="donut" viewBox="0 0 128 128" role="img" aria-label="${esc(aria || '')}">${paths}</svg>
+        <ul class="donut-legend">${slices.map(s => `<li><i class="sw ${s.cls}"></i><span class="lg-name">${esc(s.label)}</span><span class="lg-val">${fmtPct(s.count, total)}%</span></li>`).join('')}</ul>
+    </div>`;
+}
+
+// --- Mapa del mundo (SVG estático, para que también salga al imprimir) ---
+// world.json: Natural Earth 1:110m, x = lon + 180, y = 90 - lat; vista 85°N..60°S
+const MAP_CENTROID = { EU: [50, 12], NA: [40, -100], SA: [-15, -60], AF: [5, 20], AS: [40, 90], OC: [-25, 135] };
+let worldPromise = null;
+let reportMapWho = 'spotted';
+let reportMapRoutes = true;
+try {
+    reportMapWho = localStorage.getItem('dxadmin-report-map') === 'spotters' ? 'spotters' : 'spotted';
+    reportMapRoutes = localStorage.getItem('dxadmin-report-routes') !== '0';
+} catch (_) { /* ignore */ }
+
+const loadWorld = () => worldPromise || (worldPromise = fetch('/world.json').then(r => r.json()).catch(() => { worldPromise = null; return null; }));
+
+async function renderReportMap(d) {
+    const el = $('report-map');
+    if (!el) return;
+    const world = await loadWorld();
+    const pts = d.map?.[reportMapWho] || [];
+    const total = pts.reduce((a, p) => a + p.count, 0);
+    const max = Math.max(1, ...pts.map(p => p.count));
+    let grat = '';
+    for (let lon = 0; lon <= 360; lon += 30) grat += `M${lon} 0V180`;
+    for (let lat = 0; lat <= 180; lat += 30) grat += `M0 ${lat}H360`;
+    let routes = '';
+    if (reportMapRoutes) {
+        const rs = (d.continents || []).filter(c => c.from !== c.to && MAP_CENTROID[c.from] && MAP_CENTROID[c.to]);
+        const maxc = Math.max(1, ...rs.map(c => c.count));
+        routes = rs.map(c => {
+            const [la1, lo1] = MAP_CENTROID[c.from], [la2, lo2] = MAP_CENTROID[c.to];
+            const x1 = lo1 + 180, y1 = 90 - la1, x2 = lo2 + 180, y2 = 90 - la2;
+            const k = c.count / maxc;
+            return `<path class="route" d="M${x1} ${y1}Q${(x1 + x2) / 2} ${Math.min(y1, y2) - Math.abs(x2 - x1) * 0.18 - 4} ${x2} ${y2}" style="stroke-opacity:${(0.15 + 0.45 * k).toFixed(2)};stroke-width:${(0.6 + 3 * Math.sqrt(k)).toFixed(2)}px"/>`;
+        }).join('');
+    }
+    // Los pequeños encima, para que no los tapen los grandes
+    const dots = [...pts].sort((a, b) => b.count - a.count).map(p => {
+        const tipHtml = `<b>${esc(p.country || '')}</b>${p.prefix ? ` · ${esc(p.prefix)}` : ''}<br>${esc(t('av.mapTip', { n: fmtNum(p.count), pct: fmtPct(p.count, total) }))}`;
+        return `<circle class="dot ${reportMapWho}" cx="${(p.lon + 180).toFixed(2)}" cy="${(90 - p.lat).toFixed(2)}" r="${(0.45 + 2.1 * Math.sqrt(p.count / max)).toFixed(2)}" data-tip="${esc(tipHtml)}"/>`;
+    }).join('');
+    el.innerHTML = `<svg class="world" viewBox="0 5 360 145" role="img" aria-label="${esc(t('av.mapAria'))}">
+        <path class="graticule" d="${grat}"/>${world ? `<path class="land" d="${world.land}"/><path class="borders" d="${world.borders}"/>` : ''}
+        ${routes}${dots}</svg>`;
+    $('report-map-note').textContent = t('av.mapNote', { n: fmtNum(pts.length) });
+    $('report-map-who').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.who === reportMapWho ? 'true' : 'false'));
+    $('report-map-routes').setAttribute('aria-pressed', reportMapRoutes ? 'true' : 'false');
+}
+
+// Tooltips de las tartas, el mapa y las tablas de auditoría (atributo data-tip con HTML ya escapado)
+$('report-out').addEventListener('mousemove', (evt) => {
+    const el = evt.target.closest('[data-tip]');
+    if (!el) { tip.hidden = true; return; }
+    tip.innerHTML = el.dataset.tip;
+    tip.hidden = false;
+    const r = tip.getBoundingClientRect();
+    tip.style.left = `${Math.min(evt.clientX + 14, innerWidth - r.width - 8)}px`;
+    tip.style.top = `${evt.clientY + 14}px`;
+});
+$('report-out').addEventListener('mouseleave', () => { tip.hidden = true; });
+$('report-out').addEventListener('click', (evt) => {
+    const who = evt.target.closest('#report-map-who button');
+    const routes = evt.target.closest('#report-map-routes');
+    if (!who && !routes) return;
+    if (who) reportMapWho = who.dataset.who;
+    if (routes) reportMapRoutes = !reportMapRoutes;
+    try {
+        localStorage.setItem('dxadmin-report-map', reportMapWho);
+        localStorage.setItem('dxadmin-report-routes', reportMapRoutes ? '1' : '0');
+    } catch (_) { /* ignore */ }
+    if (reportData) renderReportMap(reportData);
+});
+
+const reportCard = (titleText, body, sub = '') => `<div class="card"><h2><span>${esc(titleText)}</span>${sub ? ` <small>${esc(sub)}</small>` : ''}</h2><div class="table-wrap">${body}</div></div>`;
+const reportTile = (label, value, sub) => `<div class="tile"><span class="tile-label">${esc(label)}</span><span class="tile-value">${value}</span><span class="tile-sub">${esc(sub || '')}</span></div>`;
+
+function spotsSection(d) {
     const total = d.total;
-    // Incluye hoy: el último día aún no ha terminado
-    const inProgress = d.to > Date.now() - 60000;
     const topBand = d.bands[0];
     const days = Math.max(1, Math.round((d.to - d.from) / DAY_MS));
-    const tile = (label, value, sub) => `<div class="tile"><span class="tile-label">${esc(label)}</span><span class="tile-value">${value}</span><span class="tile-sub">${esc(sub || '')}</span></div>`;
-    const card = (titleText, body, sub = '') => `<div class="card"><h2><span>${esc(titleText)}</span>${sub ? ` <small>${esc(sub)}</small>` : ''}</h2><div class="table-wrap">${body}</div></div>`;
 
     const paths = new Map(d.continents.map(x => [`${x.from}|${x.to}`, x.count]));
     const matrix = `<table class="matrix"><thead><tr><th>${esc(t('av.pathsFrom'))} \\ ${esc(t('av.pathsTo'))}</th>${CONTINENTS.map(c => `<th class="num" title="${esc(t(`cont.${c}`))}">${c}</th>`).join('')}</tr></thead>
@@ -578,6 +692,9 @@ function renderReport(d, title, p) {
             const n = paths.get(`${f}|${c}`) || 0;
             return `<td class="num${n ? '' : ' muted'}">${n ? fmtNum(n) : '·'}</td>`;
         }).join('')}</tr>`).join('')}</tbody></table>`;
+    // Spots por continente de la estación DX (columnas de la matriz)
+    const dxCont = CONTINENTS.map(c => ({ name: c, count: d.continents.filter(x => x.to === c).reduce((a, x) => a + x.count, 0) }));
+    const spotterCont = CONTINENTS.map(c => ({ name: c, count: d.continents.filter(x => x.from === c).reduce((a, x) => a + x.count, 0) }));
 
     const uniq = d.uniqueCalls;
     const qsl = `<table><thead><tr><th>${esc(t('rpt.service'))}</th><th class="num">${esc(t('rpt.stations'))}</th><th class="num">%</th><th class="num">Spots</th><th class="num">%</th></tr></thead>
@@ -585,45 +702,173 @@ function renderReport(d, title, p) {
             const q = d.qsl?.[k] || { calls: 0, spots: 0 };
             return `<tr><td>${esc(k === 'none' ? t('rpt.noQsl') : QSL_NAMES[k])}</td><td class="num">${fmtNum(q.calls)}</td><td class="num">${fmtPct(q.calls, uniq)}</td><td class="num">${fmtNum(q.spots)}</td><td class="num">${fmtPct(q.spots, total)}</td></tr>`;
         }).join('')}</tbody></table>`;
+    const contLabel = (x) => t(`cont.${x.name}`);
 
-    out.innerHTML = `
-        <div class="card report-head">
-            <h3>${esc(title)}${inProgress ? `<span class="report-tag">${esc(t('rep.inProgress'))}</span>` : ''}</h3>
-            <span class="sub">${esc(t('rpt.generated', { date: new Date(d.generatedAt || Date.now()).toLocaleString(LOCALE, { dateStyle: 'medium', timeStyle: 'short' }) }))}</span>
-        </div>
+    return `
         <div class="tiles">
-            ${tile(t('av.kpi.spots'), fmtNum(total), t('rpt.perDay', { n: fmtNum(Math.round(total / days)) }))}
-            ${tile(t('av.kpi.calls'), fmtNum(d.uniqueCalls), t('av.kpi.callsSub'))}
-            ${tile(t('av.kpi.dxcc'), fmtNum(d.uniqueCountries), t('av.kpi.dxccSub'))}
-            ${tile(t('av.kpi.spotters'), fmtNum(d.uniqueSpotters), t('av.kpi.spottersSub'))}
-            ${tile(t('av.kpi.rbn'), `${fmtPct(d.rbn, total)}%`, t('av.kpi.rbnSub', { rbn: fmtNum(d.rbn), manual: fmtNum(d.manual) }))}
-            ${tile(t('av.kpi.topBand'), esc(topBand?.name || '—'), topBand ? t('av.kpi.topBandSub', { pct: fmtPct(topBand.count, total) }) : '')}
+            ${reportTile(t('av.kpi.spots'), fmtNum(total), t('rpt.perDay', { n: fmtNum(Math.round(total / days)) }))}
+            ${reportTile(t('av.kpi.calls'), fmtNum(d.uniqueCalls), t('av.kpi.callsSub'))}
+            ${reportTile(t('av.kpi.dxcc'), fmtNum(d.uniqueCountries), t('av.kpi.dxccSub'))}
+            ${reportTile(t('av.kpi.spotters'), fmtNum(d.uniqueSpotters), t('av.kpi.spottersSub'))}
+            ${reportTile(t('av.kpi.rbn'), `${fmtPct(d.rbn, total)}%`, t('av.kpi.rbnSub', { rbn: fmtNum(d.rbn), manual: fmtNum(d.manual) }))}
+            ${reportTile(t('av.kpi.topBand'), esc(topBand?.name || '—'), topBand ? t('av.kpi.topBandSub', { pct: fmtPct(topBand.count, total) }) : '')}
         </div>
         <div class="card"><h2><span>${esc(t('av.timeline'))}</span> <small>${esc(d.bucketMinutes >= 1440 ? t('rpt.perDayUtc') : t('av.timelineSub', { m: d.bucketMinutes }))}</small></h2><div id="report-chart"></div></div>
-        <div class="grid-2">
-            ${card(t('av.bands'), rankTable(d.bands, total, [{ label: t('av.band'), html: r => `<b>${esc(r.name)}</b>` }]))}
-            ${card(t('av.modes'), rankTable(d.modes, total, [{ label: t('rpt.mode'), html: r => `<b>${esc(r.name)}</b>` }]))}
+        <div class="card"><h2><span>${esc(t('av.map'))}</span>
+            <span class="actions">
+                <span class="seg" id="report-map-who" role="group"><button type="button" data-who="spotted">${esc(t('av.map.spotted'))}</button><button type="button" data-who="spotters">${esc(t('av.map.spotters'))}</button></span>
+                <span class="seg"><button type="button" id="report-map-routes">${esc(t('av.map.routes'))}</button></span>
+            </span></h2>
+            <div id="report-map" class="report-map"></div>
+            <div class="hint" id="report-map-note"></div>
         </div>
-        ${card(t('av.countries'), rankTable(d.countries, total, [
+        <div class="grid-2">
+            ${reportCard(t('av.bands'), donut(d.bands, { total, aria: t('rpt.pieAria', { what: t('av.bands') }) }) + rankTable(d.bands, total, [{ label: t('av.band'), html: r => `<b>${esc(r.name)}</b>` }]))}
+            ${reportCard(t('av.modes'), donut(d.modes, { total, aria: t('rpt.pieAria', { what: t('av.modes') }) }) + rankTable(d.modes, total, [{ label: t('rpt.mode'), html: r => `<b>${esc(r.name)}</b>` }]))}
+        </div>
+        <div class="grid-2">
+            ${reportCard(t('rpt.dxContinents'), donut(dxCont, { label: contLabel, aria: t('rpt.dxContinents') }), t('rpt.dxContinentsSub'))}
+            ${reportCard(t('rpt.spotterContinents'), donut(spotterCont, { label: contLabel, aria: t('rpt.spotterContinents') }), t('rpt.spotterContinentsSub'))}
+        </div>
+        ${reportCard(t('av.countries'), rankTable(d.countries, total, [
             { label: t('rpt.entity'), html: r => `${flagImg(r.adif)}<b>${esc(r.name)}</b>` },
             { label: t('rpt.continent'), html: r => esc(r.continent || '') }
         ]))}
         <div class="grid-2">
-            ${card(t('av.calls'), rankTable(d.calls, total, [
+            ${reportCard(t('av.calls'), rankTable(d.calls, total, [
                 { label: t('rpt.call'), html: r => `${flagImg(r.adif)}<b class="mono">${esc(r.name)}</b>` },
                 { label: t('av.bands'), html: r => `<span class="muted">${esc((r.bands || []).filter(Boolean).join(' '))}</span>` }
             ]))}
-            ${card(t('av.spotters'), rankTable(d.spotters, total, [
+            ${reportCard(t('av.spotters'), rankTable(d.spotters, total, [
                 { label: t('rpt.call'), html: r => `${flagImg(r.adif)}<b class="mono">${esc(r.name)}</b>` },
                 { label: t('rpt.entity'), html: r => `<span class="muted">${esc(r.country || '')}</span>` }
             ]))}
         </div>
-        ${card(t('av.paths'), matrix, t('av.pathsSub'))}
+        ${reportCard(t('av.paths'), matrix, t('av.pathsSub'))}
         <div class="grid-2">
-            ${card(t('av.qsl'), qsl, t('rpt.qslSub', { n: fmtNum(uniq) }))}
-            ${card(t('av.sources'), rankTable(d.sources, total, [{ label: t('st.col.source'), html: r => `<b>${esc(r.name)}</b>` }]))}
+            ${reportCard(t('av.qsl'), qsl, t('rpt.qslSub', { n: fmtNum(uniq) }))}
+            ${reportCard(t('av.sources'), (d.sources.length > 1 ? donut(d.sources, { total, aria: t('av.sources') }) : '') + rankTable(d.sources, total, [{ label: t('st.col.source'), html: r => `<b>${esc(r.name)}</b>` }]))}
         </div>`;
+}
+
+// --- Auditoría ---
+const AUDIT_CATEGORIES = ['source', 'system', 'database', 'reference', 'spaceWeather', 'reports', 'admin', 'auth'];
+const SW_NAMES = { hamqsl: 'N0NBH / HamQSL', kp: 'NOAA Kp', xray: 'GOES X-ray', windSpeed: 'NOAA solar wind', windMag: 'NOAA IMF', scales: 'NOAA scales', daily: 'NOAA daily indices' };
+let auditData = null;
+let auditFilter = { category: '', incidents: false };
+
+const fmtMs = (ms) => ms == null ? '—' : fmtDuration(ms / 1000);
+const fmtUtc = (ms) => new Date(ms).toLocaleString(LOCALE, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'UTC' });
+
+// Texto del evento en el idioma de la página; si falta la traducción, el mensaje guardado
+function auditText(e) {
+    const key = `aud.ev.${e.category}.${e.type}`;
+    if (!(key in STRINGS.es)) return e.message;
+    const d = e.details || {};
+    return t(key, {
+        ...d,
+        node: d.node ? nodeLabel(d.node) : '',
+        from: d.from ? nodeLabel(d.from) : '',
+        down: fmtMs(d.downMs),
+        up: fmtMs(d.upMs),
+        reason: d.reason || d.error || t('aud.noReason'),
+        size: d.size != null ? fmtBytes(d.size) : '',
+        dataset: REF_NAMES[d.dataset] || d.dataset || '',
+        source: SW_NAMES[d.source] || d.source || '',
+        lastSeen: d.lastSeen ? `${fmtUtc(d.lastSeen)} UTC` : '',
+        role: d.role ? t(`usr.role.${d.role}`) : '',
+        username: d.username || '?',
+        dropped: fmtNum(d.dropped || 0),
+        attempts: fmtNum(d.attempts || 0),
+        kind: d.kind ? t(`aud.kind.${d.kind}`) : ''
+    });
+}
+
+function auditSection(a) {
+    const count = (pred) => a.counts.filter(pred).reduce((s, c) => s + c.n, 0);
+    const errors = count(c => c.level === 'error');
+    const warnings = count(c => c.level === 'warning');
+    const outages = a.sources.reduce((s, x) => s + x.outages, 0);
+    const downMs = a.sources.reduce((s, x) => s + x.downMs, 0);
+    const failedDownloads = count(c => (c.category === 'reference' || c.category === 'spaceWeather') && c.level !== 'info');
+    const observedMs = a.observedFrom === null ? 0 : Math.max(0, a.to - a.observedFrom);
+    const avail = (ms) => observedMs ? `${(Math.max(0, 1 - ms / observedMs) * 100).toLocaleString(LOCALE, { minimumFractionDigits: 1, maximumFractionDigits: ms && ms / observedMs < 0.001 ? 3 : 1 })}%` : '—';
+    const byCat = AUDIT_CATEGORIES.map(c => ({ name: c, count: count(x => x.category === c && x.level !== 'info') }));
+
+    const sourceRows = a.sources.map(s => `<tr>
+        <td><b>${esc(s.name)}</b>${s.ongoing ? ` ${chip('critical', t('aud.downNow'))}` : ''}</td>
+        <td class="num">${fmtNum(s.disconnects)}</td><td class="num">${fmtNum(s.outages)}</td>
+        <td class="num">${esc(fmtMs(s.downMs))}</td><td class="num">${esc(fmtMs(s.longestMs))}</td>
+        <td class="num">${fmtNum(s.failovers)}</td><td class="num"><b>${avail(s.downMs)}</b></td></tr>`).join('');
+    const sys = a.system;
+    const sysRow = sys.stops ? `<tr><td><b>${esc(t('aud.ingestor'))}</b></td><td class="num">—</td><td class="num">${fmtNum(sys.stops)}</td>
+        <td class="num">${esc(fmtMs(sys.downMs))}</td><td class="num">${esc(fmtMs(sys.longestMs))}</td><td class="num">—</td><td class="num"><b>${avail(sys.downMs)}</b></td></tr>` : '';
+    const availability = sourceRows || sysRow ? `<table><thead><tr><th>${esc(t('st.col.source'))}</th><th class="num">${esc(t('aud.disconnects'))}</th><th class="num">${esc(t('aud.outages'))}</th>
+        <th class="num">${esc(t('aud.downtime'))}</th><th class="num">${esc(t('aud.longest'))}</th><th class="num">${esc(t('aud.failovers'))}</th><th class="num">${esc(t('aud.availability'))}</th></tr></thead>
+        <tbody>${sourceRows}${sysRow}</tbody></table>` : `<p class="muted">${esc(t('aud.noOutages'))}</p>`;
+
+    const since = a.firstEventAt ? t('aud.since', { date: `${fmtUtc(a.firstEventAt)} UTC` }) : t('aud.empty');
+    return `
+        <div class="card report-head audit-head"><h3>${esc(t('aud.title'))}</h3><span class="sub">${esc(since)}</span></div>
+        <div class="tiles">
+            ${reportTile(t('aud.incidents'), fmtNum(errors + warnings), t('aud.incidentsSub', { e: fmtNum(errors), w: fmtNum(warnings) }))}
+            ${reportTile(t('aud.sourceOutages'), fmtNum(outages), t('aud.sourceOutagesSub', { d: fmtMs(downMs) }))}
+            ${reportTile(t('aud.stops'), fmtNum(sys.stops), sys.stops ? t('aud.stopsSub', { d: fmtMs(sys.downMs) }) : '')}
+            ${reportTile(t('aud.failedDownloads'), fmtNum(failedDownloads), t('aud.failedDownloadsSub'))}
+            ${reportTile(t('aud.events'), fmtNum(a.total), t('aud.eventsSub'))}
+        </div>
+        <div class="grid-2">
+            ${reportCard(t('aud.availabilityTitle'), availability, observedMs ? t('aud.availabilitySub', { d: fmtMs(observedMs) }) : '')}
+            ${reportCard(t('aud.byCategory'), donut(byCat, { label: x => t(`aud.cat.${x.name}`), aria: t('aud.byCategory') }) || `<p class="muted">${esc(t('aud.noIncidents'))}</p>`)}
+        </div>
+        <div class="card">
+            <h2><span>${esc(t('aud.log'))}</span>
+                <span class="actions audit-filters">
+                    <select id="audit-cat" aria-label="${esc(t('aud.category'))}"><option value="">${esc(t('aud.allCategories'))}</option>${AUDIT_CATEGORIES.map(c => `<option value="${c}">${esc(t(`aud.cat.${c}`))}</option>`).join('')}</select>
+                    <label class="check"><input type="checkbox" id="audit-incidents"><span>${esc(t('aud.onlyIncidents'))}</span></label>
+                </span></h2>
+            <div class="table-wrap" id="audit-log"></div>
+            ${a.truncated ? `<div class="hint">${esc(t('aud.truncated', { n: fmtNum(a.events.length), total: fmtNum(a.total) }))}</div>` : ''}
+        </div>`;
+}
+
+const LEVEL_CHIP = { info: 'muted', warning: 'warning', error: 'critical' };
+
+function renderAuditLog() {
+    const el = $('audit-log');
+    if (!el || !auditData) return;
+    const rows = auditData.events.filter(e => (!auditFilter.category || e.category === auditFilter.category) && (!auditFilter.incidents || e.level !== 'info'));
+    el.innerHTML = rows.length ? `<table class="audit-table"><thead><tr><th>${esc(t('aud.when'))}</th><th>${esc(t('aud.level'))}</th><th>${esc(t('aud.category'))}</th><th>${esc(t('aud.subject'))}</th><th>${esc(t('aud.detail'))}</th></tr></thead>
+        <tbody>${rows.map(e => `<tr class="lv-${e.level}">
+            <td class="mono nowrap">${esc(fmtUtc(e.ts))}</td>
+            <td>${chip(LEVEL_CHIP[e.level] || 'muted', t(`aud.level.${e.level}`))}</td>
+            <td class="nowrap">${esc(t(`aud.cat.${e.category}`))}</td>
+            <td>${esc(e.subject || '')}</td>
+            <td>${esc(auditText(e))}</td></tr>`).join('')}</tbody></table>` : `<p class="muted">${esc(t('aud.noEvents'))}</p>`;
+}
+
+async function renderReport(d, title, audit) {
+    const out = $('report-out');
+    // Incluye hoy: el último día aún no ha terminado
+    const inProgress = (d?.to ?? audit?.to ?? 0) > Date.now() - 60000;
+    auditData = audit;
+    out.innerHTML = `
+        <div class="card report-head">
+            <h3>${esc(title)}${inProgress ? `<span class="report-tag">${esc(t('rep.inProgress'))}</span>` : ''}</h3>
+            <span class="sub">${esc(t('rpt.generated', { date: new Date(d?.generatedAt || Date.now()).toLocaleString(LOCALE, { dateStyle: 'medium', timeStyle: 'short' }) }))}</span>
+        </div>
+        ${d ? spotsSection(d) : `<div class="card"><p class="muted">${esc(t('rep.noData'))}</p></div>`}
+        ${audit ? auditSection(audit) : ''}`;
     out.hidden = false;
+
+    if (audit) {
+        $('audit-cat').value = auditFilter.category;
+        $('audit-incidents').checked = auditFilter.incidents;
+        $('audit-cat').onchange = () => { auditFilter.category = $('audit-cat').value; renderAuditLog(); };
+        $('audit-incidents').onchange = () => { auditFilter.incidents = $('audit-incidents').checked; renderAuditLog(); };
+        renderAuditLog();
+    }
+    if (!d) return;
 
     const points = fullTimeline(d);
     const multiDay = d.to - d.from > DAY_MS;
@@ -638,6 +883,7 @@ function renderReport(d, title, p) {
         },
         tip: (pt) => d.bucketMinutes >= 1440 ? fmtUtcDay(utcDay(pt.t)) : `${multiDay ? `${fmtUtcDay(utcDay(pt.t), { day: 'numeric', month: 'short' })} ` : ''}${hhmm(new Date(pt.t))} UTC`
     });
+    await renderReportMap(d);
 }
 
 setReportType('day');

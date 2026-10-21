@@ -158,6 +158,9 @@ const parsers = {
 
 const RETRY_MS = 60 * 1000;
 let retryTimer = null;
+// Audit log: only the changes between working and failing are reported
+let onEvent = () => {};
+const failingSince = {};
 
 async function refreshSources(keys) {
     const failed = [];
@@ -165,10 +168,18 @@ async function refreshSources(keys) {
         try {
             cache[key] = parsers[key](await fetchText(URLS[key]));
             status[key] = { ok: true, updatedAt: new Date().toISOString() };
+            if (failingSince[key]) {
+                onEvent({ type: 'fetchRecovered', level: 'info', message: `${key} working again`, details: { source: key, downMs: Date.now() - failingSince[key] } });
+                delete failingSince[key];
+            }
         } catch (err) {
             failed.push(key);
             status[key] = { ...status[key], ok: false, error: err.message, failedAt: new Date().toISOString() };
             console.error(`Space weather source "${key}" failed: ${err.message}`);
+            if (!failingSince[key]) {
+                failingSince[key] = Date.now();
+                onEvent({ type: 'fetchFailed', level: 'warning', message: `${key} download failed: ${err.message}`, details: { source: key, error: err.message } });
+            }
         }
     }));
     // Transient failures (e.g. a truncated response) are retried after a minute instead of waiting a full cycle
@@ -180,7 +191,8 @@ async function refreshSources(keys) {
 
 const refresh = () => refreshSources(Object.keys(URLS));
 
-function startSpaceWeather() {
+function startSpaceWeather(eventHandler) {
+    if (eventHandler) onEvent = eventHandler;
     refresh();
     setInterval(refresh, REFRESH_MS).unref();
 }

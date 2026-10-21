@@ -27,7 +27,7 @@ const hourStart = (key) => new Date(`${key}:00:00Z`);
 const floorHour = (t) => Math.floor(t / HOUR_MS) * HOUR_MS;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-function createReports({ mongoDb, spots, aggregateSpots }) {
+function createReports({ mongoDb, spots, aggregateSpots, onError = () => {} }) {
     const daily = mongoDb.collection('stats_daily');
     const dailyCalls = mongoDb.collection('stats_daily_calls');
     const hourly = mongoDb.collection('stats_hourly');
@@ -207,7 +207,7 @@ function createReports({ mongoDb, spots, aggregateSpots }) {
                 await sleep(BACKFILL_PAUSE_MS);
             }
             if (count) console.log(`Hourly summaries stored: ${count}`);
-        })().catch(err => console.error('Hourly summary failed:', err.message)).finally(() => { runningHours = null; });
+        })().catch(err => { console.error('Hourly summary failed:', err.message); onError('hourly', err); }).finally(() => { runningHours = null; });
         return runningHours;
     }
 
@@ -247,7 +247,7 @@ function createReports({ mongoDb, spots, aggregateSpots }) {
                 const key = dayKey(t);
                 if (!done.has(key)) await summariseDay(key);
             }
-        })().catch(err => console.error('Daily summary failed:', err.message)).finally(() => { runningDays = null; });
+        })().catch(err => { console.error('Daily summary failed:', err.message); onError('daily', err); }).finally(() => { runningDays = null; });
         return runningDays;
     }
 

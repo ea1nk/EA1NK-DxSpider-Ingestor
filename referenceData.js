@@ -80,6 +80,7 @@ const DATASETS = {
 
 const status = Object.fromEntries(Object.keys(DATASETS).map(k => [k, { lastError: null, lastErrorAt: null, lastCheck: null, updating: false }]));
 let onUpdated = () => {};
+let onEvent = () => {};
 let running = null;
 
 // --- Paths ---
@@ -170,12 +171,14 @@ async function updateDataset(key) {
         st.lastError = null;
         st.lastErrorAt = null;
         console.log(`Reference data "${key}" updated (${(content.length / 1048576).toFixed(1)} MB)`);
+        onEvent({ type: 'updated', level: 'info', message: `${key} updated`, details: { dataset: key, size: content.length } });
         onUpdated(key);
         return true;
     } catch (err) {
         st.lastError = err.message;
         st.lastErrorAt = Date.now();
         console.error(`Reference data "${key}" update failed: ${err.message}`);
+        onEvent({ type: 'updateFailed', level: 'error', message: `${key} download failed: ${err.message}`, details: { dataset: key, error: err.message, url: ds.url } });
         return false;
     } finally {
         st.updating = false;
@@ -198,8 +201,10 @@ function updateAll({ force = false } = {}) {
     return running;
 }
 
-function startReferenceUpdates(callback) {
+// onEvent({ type, level, message, details }) receives each update and failure, for the audit log
+function startReferenceUpdates(callback, eventHandler) {
     if (callback) onUpdated = callback;
+    if (eventHandler) onEvent = eventHandler;
     // Short delay so the first download does not slow down startup
     setTimeout(() => updateAll(), 60 * 1000).unref();
     setInterval(() => updateAll(), CHECK_INTERVAL_MS).unref();

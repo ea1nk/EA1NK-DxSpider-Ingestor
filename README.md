@@ -107,7 +107,8 @@ New spot fields under `cty.spotted` / `cty.spotter`: `clublog`, `oqrs` and `grid
 ## Administration (`/admin`)
 
 - **Status**: uptime, spots per minute, stored spots, CPU/memory, per-source connection state and stats, external data sources.
-- **Reports**: generate a day, month or custom range report (whole UTC days, up to 366) with totals, timeline, bands, modes, top entities/callsigns/spotters, continent paths, QSL services and sources; **Print / PDF** prints it or saves it as PDF from the browser.
+- **Reports**: generate a day, month or custom range report (whole UTC days, up to 366) with totals, timeline, world map, donut charts (bands, modes, continents, sources), top entities/callsigns/spotters, continent paths, QSL services and sources; **Print / PDF** prints it or saves it as PDF from the browser.
+  With **Include audit** the report adds the audit log of the period: availability of each source (disconnections, outages, downtime, node changes), ingestor stops (including unexpected ones), failed downloads of reference and propagation data, MongoDB write errors, configuration changes and sign-ins. Events are stored in SQLite (`./data`) for `AUDIT_KEEP_DAYS` days (default 400); an outage is recorded once however many retries it takes, and a source counts as up once it receives spots.
 - **Sources**: add, edit, enable/disable, reconnect or delete DX cluster sources. Each source has its own callsign (use a different SSID per source), login commands (default `set/skim`) and backup clusters.
 - **Users**: create users, change roles and passwords. `admin` can use `/admin`; `user` can use the history API (`/api/spots`).
 - **My account**: change your own password.
@@ -140,6 +141,7 @@ Environment variables:
 - `WS_HEARTBEAT_MS` (WebSocket heartbeat interval, default: `30000`)
 - `SPACE_WEATHER_REFRESH_MS` (refresh interval for propagation data, default: `900000`)
 - `REFERENCE_UPDATE_DAYS` (days between CTY/LoTW/eQSL/Club Log updates, default: `7`)
+- `AUDIT_KEEP_DAYS` (days the audit log is kept, default: `400`)
 - `DOWNLOAD_USER_AGENT` (User-Agent for external downloads, default: a desktop Chrome string; some sources reject other clients)
 - `API_PASSWORD` (legacy password-only login, read-only API token; leave empty to disable)
 - `DISABLE_TOKEN_AUTH` (`true` makes `/api/spots` public)
@@ -206,6 +208,7 @@ With `?day=YYYY-MM-DD` or `?month=YYYY-MM` it returns the day/month report (UTC)
 ### Admin API (`/api/admin/*`, role `admin`)
 
 - `GET /api/admin/status`: system status and statistics
+- `GET /api/admin/audit?from=YYYY-MM-DD&to=YYYY-MM-DD`: audit events of the period (latest 3000), counts by type and level, and downtime of each source and of the ingestor
 - `GET /api/admin/reports?from=YYYY-MM-DD&to=YYYY-MM-DD`: report for whole UTC days (both included, up to 366 days) in the `/api/activity` format, with top 30 entities and callsigns and top 20 spotters (404 when there is no data)
 - `GET|POST /api/admin/sources`, `PUT|DELETE /api/admin/sources/:id`, `POST /api/admin/sources/:id/reconnect`
 - `GET|POST /api/admin/users`, `PUT|DELETE /api/admin/users/:id` (the last admin cannot be removed or demoted)
