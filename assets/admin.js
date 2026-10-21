@@ -121,7 +121,7 @@ async function enter() {
     if (me.role !== 'admin') return showView('forbidden');
     showView('admin');
     const fromHash = location.hash.slice(1);
-    selectTab(['status', 'reports', 'sources', 'users', 'account'].includes(fromHash) ? fromHash : 'status');
+    selectTab(['status', 'reports', 'audit', 'sources', 'users', 'account'].includes(fromHash) ? fromHash : 'status');
 }
 
 $('login-form').onsubmit = async (e) => {
@@ -144,7 +144,7 @@ $('forbidden-logout').onclick = () => logout();
 function selectTab(tab) {
     currentTab = tab;
     document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === tab ? 'true' : 'false'));
-    ['status', 'reports', 'sources', 'users', 'account'].forEach(x => { $(`tab-${x}`).hidden = x !== tab; });
+    ['status', 'reports', 'audit', 'sources', 'users', 'account'].forEach(x => { $(`tab-${x}`).hidden = x !== tab; });
     history.replaceState(null, '', `#${tab}`);
     clearInterval(statusTimer);
     $('tab-meta').textContent = '';
@@ -159,6 +159,10 @@ function selectTab(tab) {
     }
     if (tab === 'users') loadUsers();
     if (tab === 'reports') initReports();
+    if (tab === 'audit') {
+        initAudit();
+        statusTimer = setInterval(loadAudit, AUDIT_REFRESH_MS);
+    }
 }
 document.querySelectorAll('.tab').forEach(b => { b.onclick = () => selectTab(b.dataset.tab); });
 
@@ -654,17 +658,19 @@ async function renderReportMap(d) {
     $('report-map-routes').setAttribute('aria-pressed', reportMapRoutes ? 'true' : 'false');
 }
 
-// Tooltips de las tartas, el mapa y las tablas de auditoría (atributo data-tip con HTML ya escapado)
-$('report-out').addEventListener('mousemove', (evt) => {
-    const el = evt.target.closest('[data-tip]');
-    if (!el) { tip.hidden = true; return; }
-    tip.innerHTML = el.dataset.tip;
-    tip.hidden = false;
-    const r = tip.getBoundingClientRect();
-    tip.style.left = `${Math.min(evt.clientX + 14, innerWidth - r.width - 8)}px`;
-    tip.style.top = `${evt.clientY + 14}px`;
-});
-$('report-out').addEventListener('mouseleave', () => { tip.hidden = true; });
+// Tooltips de las tartas y el mapa (atributo data-tip con HTML ya escapado)
+for (const id of ['report-out', 'audit-out']) {
+    $(id).addEventListener('mousemove', (evt) => {
+        const el = evt.target.closest('[data-tip]');
+        if (!el) { tip.hidden = true; return; }
+        tip.innerHTML = el.dataset.tip;
+        tip.hidden = false;
+        const r = tip.getBoundingClientRect();
+        tip.style.left = `${Math.min(evt.clientX + 14, innerWidth - r.width - 8)}px`;
+        tip.style.top = `${evt.clientY + 14}px`;
+    });
+    $(id).addEventListener('mouseleave', () => { tip.hidden = true; });
+}
 $('report-out').addEventListener('click', (evt) => {
     const who = evt.target.closest('#report-map-who button');
     const routes = evt.target.closest('#report-map-routes');
@@ -754,8 +760,8 @@ function spotsSection(d) {
 // --- Auditoría ---
 const AUDIT_CATEGORIES = ['source', 'system', 'database', 'reference', 'spaceWeather', 'reports', 'admin', 'auth'];
 const SW_NAMES = { hamqsl: 'N0NBH / HamQSL', kp: 'NOAA Kp', xray: 'GOES X-ray', windSpeed: 'NOAA solar wind', windMag: 'NOAA IMF', scales: 'NOAA scales', daily: 'NOAA daily indices' };
-let auditData = null;
-let auditFilter = { category: '', incidents: false };
+// La auditoría se muestra en el informe y en su pestaña, cada una con sus datos y filtros
+const auditViews = { report: { data: null, filter: { category: '', incidents: false } }, tab: { data: null, filter: { category: '', incidents: false } } };
 
 const fmtMs = (ms) => ms == null ? '—' : fmtDuration(ms / 1000);
 const fmtUtc = (ms) => new Date(ms).toLocaleString(LOCALE, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'UTC' });
@@ -784,7 +790,7 @@ function auditText(e) {
     });
 }
 
-function auditSection(a) {
+function auditSection(a, ns) {
     const count = (pred) => a.counts.filter(pred).reduce((s, c) => s + c.n, 0);
     const errors = count(c => c.level === 'error');
     const warnings = count(c => c.level === 'warning');
@@ -824,20 +830,21 @@ function auditSection(a) {
         <div class="card">
             <h2><span>${esc(t('aud.log'))}</span>
                 <span class="actions audit-filters">
-                    <select id="audit-cat" aria-label="${esc(t('aud.category'))}"><option value="">${esc(t('aud.allCategories'))}</option>${AUDIT_CATEGORIES.map(c => `<option value="${c}">${esc(t(`aud.cat.${c}`))}</option>`).join('')}</select>
-                    <label class="check"><input type="checkbox" id="audit-incidents"><span>${esc(t('aud.onlyIncidents'))}</span></label>
+                    <select id="${ns}-audit-cat" aria-label="${esc(t('aud.category'))}"><option value="">${esc(t('aud.allCategories'))}</option>${AUDIT_CATEGORIES.map(c => `<option value="${c}">${esc(t(`aud.cat.${c}`))}</option>`).join('')}</select>
+                    <label class="check"><input type="checkbox" id="${ns}-audit-incidents"><span>${esc(t('aud.onlyIncidents'))}</span></label>
                 </span></h2>
-            <div class="table-wrap" id="audit-log"></div>
+            <div class="table-wrap" id="${ns}-audit-log"></div>
             ${a.truncated ? `<div class="hint">${esc(t('aud.truncated', { n: fmtNum(a.events.length), total: fmtNum(a.total) }))}</div>` : ''}
         </div>`;
 }
 
 const LEVEL_CHIP = { info: 'muted', warning: 'warning', error: 'critical' };
 
-function renderAuditLog() {
-    const el = $('audit-log');
-    if (!el || !auditData) return;
-    const rows = auditData.events.filter(e => (!auditFilter.category || e.category === auditFilter.category) && (!auditFilter.incidents || e.level !== 'info'));
+function renderAuditLog(ns) {
+    const el = $(`${ns}-audit-log`);
+    const { data, filter } = auditViews[ns];
+    if (!el || !data) return;
+    const rows = data.events.filter(e => (!filter.category || e.category === filter.category) && (!filter.incidents || e.level !== 'info'));
     el.innerHTML = rows.length ? `<table class="audit-table"><thead><tr><th>${esc(t('aud.when'))}</th><th>${esc(t('aud.level'))}</th><th>${esc(t('aud.category'))}</th><th>${esc(t('aud.subject'))}</th><th>${esc(t('aud.detail'))}</th></tr></thead>
         <tbody>${rows.map(e => `<tr class="lv-${e.level}">
             <td class="mono nowrap">${esc(fmtUtc(e.ts))}</td>
@@ -847,27 +854,32 @@ function renderAuditLog() {
             <td>${esc(auditText(e))}</td></tr>`).join('')}</tbody></table>` : `<p class="muted">${esc(t('aud.noEvents'))}</p>`;
 }
 
+// Tras pintar auditSection: filtros del registro y primera lista
+function bindAudit(ns, data) {
+    const view = auditViews[ns];
+    view.data = data;
+    const cat = $(`${ns}-audit-cat`), inc = $(`${ns}-audit-incidents`);
+    cat.value = view.filter.category;
+    inc.checked = view.filter.incidents;
+    cat.onchange = () => { view.filter.category = cat.value; renderAuditLog(ns); };
+    inc.onchange = () => { view.filter.incidents = inc.checked; renderAuditLog(ns); };
+    renderAuditLog(ns);
+}
+
 async function renderReport(d, title, audit) {
     const out = $('report-out');
     // Incluye hoy: el último día aún no ha terminado
     const inProgress = (d?.to ?? audit?.to ?? 0) > Date.now() - 60000;
-    auditData = audit;
     out.innerHTML = `
         <div class="card report-head">
             <h3>${esc(title)}${inProgress ? `<span class="report-tag">${esc(t('rep.inProgress'))}</span>` : ''}</h3>
             <span class="sub">${esc(t('rpt.generated', { date: new Date(d?.generatedAt || Date.now()).toLocaleString(LOCALE, { dateStyle: 'medium', timeStyle: 'short' }) }))}</span>
         </div>
         ${d ? spotsSection(d) : `<div class="card"><p class="muted">${esc(t('rep.noData'))}</p></div>`}
-        ${audit ? auditSection(audit) : ''}`;
+        ${audit ? auditSection(audit, 'report') : ''}`;
     out.hidden = false;
 
-    if (audit) {
-        $('audit-cat').value = auditFilter.category;
-        $('audit-incidents').checked = auditFilter.incidents;
-        $('audit-cat').onchange = () => { auditFilter.category = $('audit-cat').value; renderAuditLog(); };
-        $('audit-incidents').onchange = () => { auditFilter.incidents = $('audit-incidents').checked; renderAuditLog(); };
-        renderAuditLog();
-    }
+    if (audit) bindAudit('report', audit);
     if (!d) return;
 
     const points = fullTimeline(d);
@@ -887,6 +899,76 @@ async function renderReport(d, title, audit) {
 }
 
 setReportType('day');
+
+// --- Pestaña de auditoría: hoy, últimos 7 o 30 días o un rango; se refresca sola ---
+const AUDIT_REFRESH_MS = 60000;
+let auditPeriod = 7;
+try { auditPeriod = JSON.parse(localStorage.getItem('dxadmin-audit-period')) ?? 7; } catch (_) { /* ignore */ }
+if (![1, 7, 30, 'range'].includes(auditPeriod)) auditPeriod = 7;
+let auditBusy = false;
+
+function setAuditPeriod(p) {
+    auditPeriod = p;
+    try { localStorage.setItem('dxadmin-audit-period', JSON.stringify(p)); } catch (_) { /* ignore */ }
+    $('audit-period').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.period) === String(p) ? 'true' : 'false'));
+    $('audit-form').querySelectorAll('label[data-for]').forEach(l => { l.hidden = p !== 'range'; });
+    $('audit-go').hidden = p !== 'range';
+}
+
+function auditRange() {
+    const today = utcDay(Date.now());
+    if (auditPeriod !== 'range') return { from: utcDay(Date.now() - (auditPeriod - 1) * DAY_MS), to: today };
+    const f = $('audit-form');
+    const isDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+    if (!isDay(f.from.value) || !isDay(f.to.value)) return { error: t('rpt.badDate') };
+    if (f.from.value > f.to.value) return { error: t('rpt.badOrder') };
+    if ((Date.parse(f.to.value) - Date.parse(f.from.value)) / DAY_MS + 1 > REPORT_MAX_DAYS) return { error: t('rpt.tooLong', { max: REPORT_MAX_DAYS }) };
+    return { from: f.from.value, to: f.to.value };
+}
+
+async function loadAudit() {
+    if (auditBusy) return;
+    const msg = $('audit-msg');
+    const p = auditRange();
+    if (p.error) return showMsg(msg, p.error);
+    auditBusy = true;
+    try {
+        const a = await api('GET', `/api/admin/audit?from=${p.from}&to=${p.to}`);
+        showMsg(msg, '');
+        const out = $('audit-out');
+        // Mantiene la posición al refrescar
+        const y = scrollY;
+        out.innerHTML = auditSection(a, 'tab');
+        out.hidden = false;
+        bindAudit('tab', a);
+        scrollTo(0, y);
+        $('tab-meta').textContent = `${p.from === p.to ? fmtUtcDay(p.from) : `${fmtUtcDay(p.from)} – ${fmtUtcDay(p.to)}`} · ${t('adm.refresh', { s: AUDIT_REFRESH_MS / 1000 })}`;
+    } catch (err) {
+        showMsg(msg, t('adm.error', { msg: err.message }));
+    } finally {
+        auditBusy = false;
+    }
+}
+
+function initAudit() {
+    const f = $('audit-form');
+    if (!f.to.value) {
+        const today = utcDay(Date.now());
+        f.from.value = utcDay(Date.now() - 6 * DAY_MS);
+        f.to.value = today;
+        f.from.max = f.to.max = today;
+    }
+    setAuditPeriod(auditPeriod);
+    loadAudit();
+}
+
+$('audit-period').onclick = (e) => {
+    const b = e.target.closest('button[data-period]');
+    if (!b) return;
+    setAuditPeriod(b.dataset.period === 'range' ? 'range' : Number(b.dataset.period));
+    if (auditPeriod !== 'range') loadAudit();
+};
+$('audit-form').onsubmit = (e) => { e.preventDefault(); loadAudit(); };
 
 // --- Orígenes ---
 let sourcesCache = [];

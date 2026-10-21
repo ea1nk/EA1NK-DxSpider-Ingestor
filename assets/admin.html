@@ -142,7 +142,7 @@
             :root { --bg: #fff; --card: #fff; --card-2: #fff; --text: #111; --muted: #555; --line: #d4d4d8; --series: #2563eb; }
             @page { margin: 12mm; }
             body { background: #fff; color: #111; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            .header, .tabs, .report-form, .site-footer, .toast, .viz-tip, #view-admin > section:not(#tab-reports) { display: none !important; }
+            .header, .tabs, .report-form, .site-footer, .toast, .viz-tip, #view-admin > section:not(#tab-reports):not(#tab-audit) { display: none !important; }
             .card, .tile { border-color: #d4d4d8; break-inside: avoid; }
             .card h2 { color: #333; }
             .tile-value, .report-head h3, td b { color: #111; }
@@ -301,6 +301,7 @@
         <div class="tabs" role="tablist">
             <button class="tab" role="tab" data-tab="status" data-i18n="adm.tab.status">Estado</button>
             <button class="tab" role="tab" data-tab="reports" data-i18n="adm.tab.reports">Informes</button>
+            <button class="tab" role="tab" data-tab="audit" data-i18n="adm.tab.audit">Auditoría</button>
             <button class="tab" role="tab" data-tab="sources" data-i18n="adm.tab.sources">Orígenes</button>
             <button class="tab" role="tab" data-tab="users" data-i18n="adm.tab.users">Usuarios</button>
             <button class="tab" role="tab" data-tab="account" data-i18n="adm.tab.account">Mi cuenta</button>
@@ -387,6 +388,26 @@
             <div id="report-out" class="stack" hidden></div>
         </section>
 
+        <!-- Auditoría -->
+        <section id="tab-audit" class="stack" hidden>
+            <form id="audit-form" class="card report-form">
+                <div class="report-controls">
+                    <div class="seg" id="audit-period" role="group" data-i18n-aria="aud.period">
+                        <button type="button" data-period="1" data-i18n="aud.today">Hoy</button>
+                        <button type="button" data-period="7" data-i18n="aud.days7">7 días</button>
+                        <button type="button" data-period="30" data-i18n="aud.days30">30 días</button>
+                        <button type="button" data-period="range" data-i18n="rpt.range">Rango</button>
+                    </div>
+                    <label data-for="range"><span data-i18n="rpt.from">Desde</span><input type="date" name="from"></label>
+                    <label data-for="range"><span data-i18n="rpt.to">Hasta</span><input type="date" name="to"></label>
+                    <div class="actions"><button class="btn primary" type="submit" id="audit-go" data-i18n="aud.show">Mostrar</button></div>
+                </div>
+                <span class="hint" data-i18n="aud.tabHint"></span>
+                <div id="audit-msg" class="msg error" hidden></div>
+            </form>
+            <div id="audit-out" class="stack" hidden></div>
+        </section>
+
         <!-- Orígenes -->
         <section id="tab-sources" hidden>
             <div class="toolbar">
@@ -450,7 +471,7 @@
 
     <div id="toast" class="toast" hidden></div>
 
-    <script src="i18n.js?v=20261021b"></script>
-    <script src="admin.js?v=20261021b"></script>
+    <script src="i18n.js?v=20261021c"></script>
+    <script src="admin.js?v=20261021c"></script>
 </body>
 </html>
