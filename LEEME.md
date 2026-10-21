@@ -108,6 +108,7 @@ Campos nuevos del spot en `cty.spotted` / `cty.spotter`: `clublog`, `oqrs` y `gr
 ## Administración (`/admin`)
 
 - **Estado**: tiempo activo, spots por minuto, spots guardados, CPU/memoria, estado y estadísticas de cada origen y de las fuentes de datos externas.
+- **Informes**: genera un informe de un día, un mes o un rango libre (días UTC completos, hasta 366) con totales, evolución en el tiempo, bandas, modos, entidades/indicativos/spotters más activos, rutas entre continentes, servicios QSL y orígenes; **Imprimir / PDF** lo imprime o lo guarda como PDF desde el navegador.
 - **Orígenes**: añadir, editar, activar/desactivar, reconectar o eliminar orígenes. Cada origen tiene su indicativo (usa un SSID distinto por origen), comandos tras el login (por defecto `set/skim`) y clusters de respaldo.
 - **Usuarios**: crear usuarios, cambiar roles y contraseñas. `admin` accede a `/admin`; `user` accede a la API histórica (`/api/spots`).
 - **Mi cuenta**: cambiar tu contraseña.
@@ -206,6 +207,7 @@ Con `?day=AAAA-MM-DD` o `?month=AAAA-MM` devuelve el informe de ese día o mes (
 ### API de administración (`/api/admin/*`, rol `admin`)
 
 - `GET /api/admin/status`: estado y estadísticas del sistema
+- `GET /api/admin/reports?from=AAAA-MM-DD&to=AAAA-MM-DD`: informe de días UTC completos (ambos incluidos, hasta 366 días) con el formato de `/api/activity`, con las 30 entidades e indicativos y los 20 spotters más activos (404 si no hay datos)
 - `GET|POST /api/admin/sources`, `PUT|DELETE /api/admin/sources/:id`, `POST /api/admin/sources/:id/reconnect`
 - `GET|POST /api/admin/users`, `PUT|DELETE /api/admin/users/:id` (el último administrador no se puede eliminar ni degradar)
 

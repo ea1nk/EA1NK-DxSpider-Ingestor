@@ -15,6 +15,8 @@ const DAY_MS = 86400000;
 const HOUR_BUCKET_MINUTES = 10;
 const HOURLY_KEEP_DAYS = 9;
 const SUMMARY_LIMITS = { countries: 400, calls: 200, spotters: 100 };
+const REPORT_LIMITS = { countries: 30, calls: 30, spotters: 20 };
+const REPORT_MAX_DAYS = 366;
 const LIVE_CACHE_MS = 2 * 60 * 1000;
 const BACKFILL_PAUSE_MS = 1500;
 
@@ -305,14 +307,12 @@ function createReports({ mongoDb, spots, aggregateSpots }) {
         return { ...d.data, countries: d.data.countries.slice(0, 15), calls: d.data.calls.slice(0, 15), spotters: d.data.spotters.slice(0, 10) };
     }
 
-    // --- Month report: merge its days ---
-    async function getMonth(month) {
-        const first = new Date(`${month}-01T00:00:00Z`);
-        if (Number.isNaN(first.getTime())) return null;
-        const next = Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 1);
+    // --- Period report: merge the days of [fromKey, toKey] (UTC, both included) ---
+    async function getPeriod(fromKey, toKey, { bucketMinutes = 1440, limits } = {}) {
+        const first = dayStart(fromKey).getTime(), next = dayStart(toKey).getTime() + DAY_MS;
         const today = dayKey(Date.now());
         const parts = [], storedIds = [], extra = [];
-        for (let t = first.getTime(); t < next && dayKey(t) <= today; t += DAY_MS) {
+        for (let t = first; t < next && dayKey(t) <= today; t += DAY_MS) {
             const d = await dayData(dayKey(t));
             if (!d || !d.data.total) continue;
             parts.push(d.data);
@@ -321,7 +321,27 @@ function createReports({ mongoDb, spots, aggregateSpots }) {
         }
         if (!parts.length) return null;
         const uniq = await unionCalls(dailyCalls, storedIds, extra);
-        return mergeParts(parts, uniq, { from: first.getTime(), to: Math.min(next, Date.now()), bucketMinutes: 1440 });
+        return mergeParts(parts, uniq, { from: first, to: Math.min(next, Date.now()), bucketMinutes, limits });
+    }
+
+    // --- Month report ---
+    async function getMonth(month) {
+        const first = new Date(`${month}-01T00:00:00Z`);
+        if (Number.isNaN(first.getTime())) return null;
+        const last = Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0);
+        return getPeriod(dayKey(first), dayKey(last));
+    }
+
+    // --- Reports generated from /admin: any range of whole days, with longer top lists ---
+    // One day keeps its hourly buckets; up to a week, hourly too; longer ranges, daily.
+    async function getReport(fromKey, toKey) {
+        if (fromKey === toKey) {
+            const d = await dayData(fromKey);
+            if (!d || !d.data.total) return null;
+            return { ...d.data, countries: d.data.countries.slice(0, REPORT_LIMITS.countries), calls: d.data.calls.slice(0, REPORT_LIMITS.calls), spotters: d.data.spotters.slice(0, REPORT_LIMITS.spotters) };
+        }
+        const days = (dayStart(toKey) - dayStart(fromKey)) / DAY_MS + 1;
+        return getPeriod(fromKey, toKey, { bucketMinutes: days <= 7 ? 60 : 1440, limits: REPORT_LIMITS });
     }
 
     // First day with data (summary or spots) and today, for the report pickers
@@ -332,7 +352,7 @@ function createReports({ mongoDb, spots, aggregateSpots }) {
         return { firstDay: candidates[0] || dayKey(Date.now()), lastDay: dayKey(Date.now()) };
     }
 
-    return { start, getWindow, getDay, getMonth, range };
+    return { start, getWindow, getDay, getMonth, getReport, range };
 }
 
-module.exports = { createReports };
+module.exports = { createReports, REPORT_MAX_DAYS };

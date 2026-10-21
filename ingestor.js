@@ -14,7 +14,7 @@ const jwt=require('@fastify/jwt');
 const fp = require('fastify-plugin');
 const { lookupCallsignInfo, reloadReferenceData, preloadReferenceData, referenceCounts }=require('./callsignLookup');
 const referenceData=require('./referenceData');
-const { createReports }=require('./reports');
+const { createReports, REPORT_MAX_DAYS }=require('./reports');
 const { startSpaceWeather, getSpaceWeather }=require('./spaceWeather');
 const db=require('./db');
 const auth=require('./auth');
@@ -644,6 +644,20 @@ fastify.register(async (instance) => {
         admin.addHook('onRequest', instance.requireAdmin);
 
         admin.get('/status', async () => getSystemStatus());
+
+        // Report for whole UTC days: ?from=YYYY-MM-DD&to=YYYY-MM-DD (both included)
+        admin.get('/reports', async (req, reply) => {
+            const { from, to } = req.query;
+            const valid = (d) => {
+                const ts = /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? Date.parse(`${d}T00:00:00Z`) : NaN;
+                return !Number.isNaN(ts) && new Date(ts).toISOString().startsWith(d);
+            };
+            if (!valid(from) || !valid(to)) return reply.code(400).send({ error: 'from and to must be YYYY-MM-DD' });
+            if (from > to) return reply.code(400).send({ error: 'from must not be after to' });
+            const days = (Date.parse(to) - Date.parse(from)) / 86400000 + 1;
+            if (days > REPORT_MAX_DAYS) return reply.code(400).send({ error: `The range cannot be longer than ${REPORT_MAX_DAYS} days` });
+            return (await reports.getReport(from, to)) || reply.code(404).send({ error: 'No data for this period' });
+        });
 
         // Spot retention (TTL). The preview tells how many spots a shorter retention would delete.
         const parseDays = (v) => {

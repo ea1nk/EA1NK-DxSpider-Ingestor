@@ -121,7 +121,7 @@ async function enter() {
     if (me.role !== 'admin') return showView('forbidden');
     showView('admin');
     const fromHash = location.hash.slice(1);
-    selectTab(['status', 'sources', 'users', 'account'].includes(fromHash) ? fromHash : 'status');
+    selectTab(['status', 'reports', 'sources', 'users', 'account'].includes(fromHash) ? fromHash : 'status');
 }
 
 $('login-form').onsubmit = async (e) => {
@@ -144,7 +144,7 @@ $('forbidden-logout').onclick = () => logout();
 function selectTab(tab) {
     currentTab = tab;
     document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === tab ? 'true' : 'false'));
-    ['status', 'sources', 'users', 'account'].forEach(x => { $(`tab-${x}`).hidden = x !== tab; });
+    ['status', 'reports', 'sources', 'users', 'account'].forEach(x => { $(`tab-${x}`).hidden = x !== tab; });
     history.replaceState(null, '', `#${tab}`);
     clearInterval(statusTimer);
     $('tab-meta').textContent = '';
@@ -158,6 +158,7 @@ function selectTab(tab) {
         statusTimer = setInterval(loadSources, STATUS_REFRESH_MS);
     }
     if (tab === 'users') loadUsers();
+    if (tab === 'reports') initReports();
 }
 document.querySelectorAll('.tab').forEach(b => { b.onclick = () => selectTab(b.dataset.tab); });
 
@@ -382,8 +383,18 @@ tip.className = 'viz-tip';
 tip.hidden = true;
 document.body.appendChild(tip);
 
+const hhmm = (d) => `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+
 function renderRateChart(points) {
-    const el = $('rate-chart');
+    barChart($('rate-chart'), points, {
+        aria: t('st.rateAria'),
+        tick: (p) => { const d = new Date(p.t); return d.getUTCMinutes() % 15 === 0 ? hhmm(d) : null; },
+        tip: (p) => `${hhmm(new Date(p.t))} UTC`
+    });
+}
+
+// Columnas de una serie con tooltip; tick(p, i) devuelve la etiqueta del eje o null
+function barChart(el, points, { aria, tick, tip: tipLabel }) {
     // Dibujado al ancho real del contenedor para que el texto no se escale
     const W = Math.max(320, Math.round(el.clientWidth || 720)), H = 180, L = 34, R = 8, T = 10, B = 24;
     const pw = W - L - R, ph = H - T - B;
@@ -391,7 +402,7 @@ function renderRateChart(points) {
     const step = Math.pow(10, Math.floor(Math.log10(rawMax)));
     const max = Math.ceil(rawMax / step) * step;
     const slot = pw / points.length;
-    const bw = Math.min(24, slot - 2);
+    const bw = Math.min(24, Math.max(1, slot - 2));
     const y = (v) => T + ph - (v / max) * ph;
     let grid = '';
     [0, max / 2, max].forEach(v => {
@@ -404,21 +415,18 @@ function renderRateChart(points) {
         const top = T + ph - h;
         const r = Math.min(3, bw / 2, h);
         if (h) bars += `<path class="bar" data-i="${i}" d="M${x0},${T + ph}V${top + r}Q${x0},${top} ${x0 + r},${top}H${x0 + bw - r}Q${x0 + bw},${top} ${x0 + bw},${top + r}V${T + ph}Z"/>`;
-        const d = new Date(p.t);
-        if (d.getUTCMinutes() % 15 === 0) {
-            ticks += `<text x="${L + i * slot + slot / 2}" y="${H - 6}" class="axis" text-anchor="middle">${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}</text>`;
-        }
+        const label = tick(p, i);
+        if (label) ticks += `<text x="${L + i * slot + slot / 2}" y="${H - 6}" class="axis" text-anchor="middle">${esc(label)}</text>`;
     });
     const hits = points.map((p, i) => `<rect class="hit" data-i="${i}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}"/>`).join('');
-    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="${esc(t('st.rateAria'))}">${grid}${ticks}${bars}${hits}</svg>`;
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="${esc(aria)}">${grid}${ticks}${bars}${hits}</svg>`;
     const svg = el.querySelector('svg');
     svg.querySelectorAll('.hit').forEach(rect => {
         rect.onmousemove = (evt) => {
             const i = rect.dataset.i;
             const p = points[i];
-            const d = new Date(p.t);
             svg.querySelectorAll('.bar').forEach(b => b.classList.toggle('hover', b.dataset.i === i));
-            tip.innerHTML = `<b>${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')} UTC</b><br>${fmtNum(p.count)} spots`;
+            tip.innerHTML = `<b>${esc(tipLabel(p))}</b><br>${fmtNum(p.count)} spots`;
             tip.hidden = false;
             const r = tip.getBoundingClientRect();
             tip.style.left = `${Math.min(evt.clientX + 14, innerWidth - r.width - 8)}px`;
@@ -427,6 +435,212 @@ function renderRateChart(points) {
         rect.onmouseleave = () => { tip.hidden = true; svg.querySelectorAll('.bar.hover').forEach(b => b.classList.remove('hover')); };
     });
 }
+
+// --- Informes (días UTC completos, desde los resúmenes diarios) ---
+const DAY_MS = 86400000;
+const REPORT_MAX_DAYS = 366;
+const CONTINENTS = ['EU', 'NA', 'SA', 'AS', 'AF', 'OC', 'AN'];
+const QSL_NAMES = { lotw: 'LoTW', eqsl: 'eQSL', clublog: 'Club Log', oqrs: 'OQRS' };
+let reportType = 'day';
+let reportRange = null;
+let reportData = null;
+let reportTitle = '';
+let reportBusy = false;
+
+const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+const fmtUtcDay = (key, opts = { day: 'numeric', month: 'long', year: 'numeric' }) => new Date(`${key}T00:00:00Z`).toLocaleDateString(LOCALE, { ...opts, timeZone: 'UTC' });
+const fmtPct = (part, total) => total ? (part / total * 100).toLocaleString(LOCALE, { maximumFractionDigits: part / total < 0.1 ? 1 : 0 }) : '0';
+const flagImg = (adif) => adif ? `<img class="flag" src="/flags/${encodeURIComponent(adif)}.svg" alt="" onerror="this.style.visibility='hidden'">` : '';
+
+function setReportType(type) {
+    reportType = type;
+    $('report-type').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.type === type ? 'true' : 'false'));
+    $('report-form').querySelectorAll('label[data-for]').forEach(l => { l.hidden = l.dataset.for !== type; });
+}
+
+async function initReports() {
+    if (!reportRange) {
+        try { reportRange = await api('GET', '/api/reports/range'); } catch (_) { reportRange = { firstDay: utcDay(Date.now()), lastDay: utcDay(Date.now()) }; }
+        const f = $('report-form');
+        const { firstDay, lastDay } = reportRange;
+        for (const name of ['day', 'from', 'to']) { f[name].min = firstDay; f[name].max = lastDay; }
+        f.month.min = firstDay.slice(0, 7);
+        f.month.max = lastDay.slice(0, 7);
+        // Por defecto: ayer (último día cerrado), el mes en curso y la última semana
+        const yesterday = utcDay(Date.parse(lastDay) - DAY_MS);
+        f.day.value = yesterday >= firstDay ? yesterday : lastDay;
+        f.month.value = lastDay.slice(0, 7);
+        const weekAgo = utcDay(Date.parse(lastDay) - 6 * DAY_MS);
+        f.from.value = weekAgo >= firstDay ? weekAgo : firstDay;
+        f.to.value = lastDay;
+        $('report-hint').textContent = t('rpt.hint', { first: fmtUtcDay(firstDay), max: REPORT_MAX_DAYS });
+    }
+}
+
+// Periodo pedido como { from, to } (claves de día incluidas) o un mensaje de error
+function reportPeriod() {
+    const f = $('report-form');
+    const isDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+    if (reportType === 'day') return isDay(f.day.value) ? { from: f.day.value, to: f.day.value } : { error: t('rpt.badDate') };
+    if (reportType === 'month') {
+        const m = f.month.value.trim();
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) return { error: t('rpt.badMonth') };
+        const [y, mo] = m.split('-').map(Number);
+        return { from: `${m}-01`, to: utcDay(Date.UTC(y, mo, 0)), month: m };
+    }
+    if (!isDay(f.from.value) || !isDay(f.to.value)) return { error: t('rpt.badDate') };
+    if (f.from.value > f.to.value) return { error: t('rpt.badOrder') };
+    if ((Date.parse(f.to.value) - Date.parse(f.from.value)) / DAY_MS + 1 > REPORT_MAX_DAYS) return { error: t('rpt.tooLong', { max: REPORT_MAX_DAYS }) };
+    return { from: f.from.value, to: f.to.value };
+}
+
+function periodTitle(p) {
+    if (p.month) return t('rep.monthTitle', { month: fmtUtcDay(p.from, { month: 'long', year: 'numeric' }) });
+    if (p.from === p.to) return t('rep.dayTitle', { date: fmtUtcDay(p.from) });
+    return t('rpt.rangeTitle', { from: fmtUtcDay(p.from), to: fmtUtcDay(p.to) });
+}
+
+$('report-type').onclick = (e) => {
+    const b = e.target.closest('button[data-type]');
+    if (b) setReportType(b.dataset.type);
+};
+
+$('report-form').onsubmit = async (e) => {
+    e.preventDefault();
+    if (reportBusy) return;
+    const msg = $('report-msg');
+    const p = reportPeriod();
+    if (p.error) return showMsg(msg, p.error);
+    // El mes en curso se recorta a hoy; el servidor también lo hace
+    const to = reportRange && p.to > reportRange.lastDay ? reportRange.lastDay : p.to;
+    showMsg(msg, '');
+    reportBusy = true;
+    $('report-go').disabled = true;
+    $('report-go').textContent = t('rpt.generating');
+    try {
+        reportData = await api('GET', `/api/admin/reports?from=${p.from}&to=${to}`);
+        reportTitle = periodTitle(p);
+        renderReport(reportData, reportTitle, p);
+        $('report-print').disabled = false;
+    } catch (err) {
+        reportData = null;
+        $('report-out').hidden = true;
+        $('report-print').disabled = true;
+        showMsg(msg, err.status === 404 ? t('rep.noData') : t('adm.error', { msg: err.message }));
+    } finally {
+        reportBusy = false;
+        $('report-go').disabled = false;
+        $('report-go').textContent = t('rpt.go');
+    }
+};
+
+// El título del documento da nombre al PDF
+$('report-print').onclick = () => {
+    const prev = document.title;
+    document.title = `DX · ${reportTitle}`;
+    addEventListener('afterprint', () => { document.title = prev; }, { once: true });
+    print();
+};
+
+// Tabla de ranking: cols = [{ label, html(row), num? }], con columna de cuota sobre el total
+function rankTable(rows, total, cols) {
+    if (!rows?.length) return `<p class="muted">${esc(t('av.empty'))}</p>`;
+    const max = Math.max(...rows.map(r => r.count));
+    return `<table><thead><tr><th class="num">#</th>${cols.map(c => `<th${c.num ? ' class="num"' : ''}>${esc(c.label)}</th>`).join('')}
+        <th class="num">Spots</th><th class="num">%</th><th></th></tr></thead>
+        <tbody>${rows.map((r, i) => `<tr><td class="num muted">${i + 1}</td>${cols.map(c => `<td${c.num ? ' class="num"' : ''}>${c.html(r)}</td>`).join('')}
+            <td class="num">${fmtNum(r.count)}</td><td class="num">${fmtPct(r.count, total)}</td>
+            <td class="share"><span class="share-bar" style="width:${(r.count / max * 100).toFixed(1)}%"></span></td></tr>`).join('')}</tbody></table>`;
+}
+
+// Intervalos vacíos incluidos, para que el eje del tiempo sea continuo
+function fullTimeline(d) {
+    const step = d.bucketMinutes * 60000;
+    const counts = new Map(d.timeline.map(x => [x.t, x.count]));
+    const out = [];
+    for (let t0 = Math.floor(d.from / step) * step; t0 < d.to; t0 += step) out.push({ t: t0, count: counts.get(t0) || 0 });
+    return out;
+}
+
+function renderReport(d, title, p) {
+    const out = $('report-out');
+    const total = d.total;
+    // Incluye hoy: el último día aún no ha terminado
+    const inProgress = d.to > Date.now() - 60000;
+    const topBand = d.bands[0];
+    const days = Math.max(1, Math.round((d.to - d.from) / DAY_MS));
+    const tile = (label, value, sub) => `<div class="tile"><span class="tile-label">${esc(label)}</span><span class="tile-value">${value}</span><span class="tile-sub">${esc(sub || '')}</span></div>`;
+    const card = (titleText, body, sub = '') => `<div class="card"><h2><span>${esc(titleText)}</span>${sub ? ` <small>${esc(sub)}</small>` : ''}</h2><div class="table-wrap">${body}</div></div>`;
+
+    const paths = new Map(d.continents.map(x => [`${x.from}|${x.to}`, x.count]));
+    const matrix = `<table class="matrix"><thead><tr><th>${esc(t('av.pathsFrom'))} \\ ${esc(t('av.pathsTo'))}</th>${CONTINENTS.map(c => `<th class="num" title="${esc(t(`cont.${c}`))}">${c}</th>`).join('')}</tr></thead>
+        <tbody>${CONTINENTS.map(f => `<tr><td title="${esc(t(`cont.${f}`))}"><b>${f}</b> <span class="muted">${esc(t(`cont.${f}`))}</span></td>${CONTINENTS.map(c => {
+            const n = paths.get(`${f}|${c}`) || 0;
+            return `<td class="num${n ? '' : ' muted'}">${n ? fmtNum(n) : '·'}</td>`;
+        }).join('')}</tr>`).join('')}</tbody></table>`;
+
+    const uniq = d.uniqueCalls;
+    const qsl = `<table><thead><tr><th>${esc(t('rpt.service'))}</th><th class="num">${esc(t('rpt.stations'))}</th><th class="num">%</th><th class="num">Spots</th><th class="num">%</th></tr></thead>
+        <tbody>${[...Object.keys(QSL_NAMES), 'none'].map(k => {
+            const q = d.qsl?.[k] || { calls: 0, spots: 0 };
+            return `<tr><td>${esc(k === 'none' ? t('rpt.noQsl') : QSL_NAMES[k])}</td><td class="num">${fmtNum(q.calls)}</td><td class="num">${fmtPct(q.calls, uniq)}</td><td class="num">${fmtNum(q.spots)}</td><td class="num">${fmtPct(q.spots, total)}</td></tr>`;
+        }).join('')}</tbody></table>`;
+
+    out.innerHTML = `
+        <div class="card report-head">
+            <h3>${esc(title)}${inProgress ? `<span class="report-tag">${esc(t('rep.inProgress'))}</span>` : ''}</h3>
+            <span class="sub">${esc(t('rpt.generated', { date: new Date(d.generatedAt || Date.now()).toLocaleString(LOCALE, { dateStyle: 'medium', timeStyle: 'short' }) }))}</span>
+        </div>
+        <div class="tiles">
+            ${tile(t('av.kpi.spots'), fmtNum(total), t('rpt.perDay', { n: fmtNum(Math.round(total / days)) }))}
+            ${tile(t('av.kpi.calls'), fmtNum(d.uniqueCalls), t('av.kpi.callsSub'))}
+            ${tile(t('av.kpi.dxcc'), fmtNum(d.uniqueCountries), t('av.kpi.dxccSub'))}
+            ${tile(t('av.kpi.spotters'), fmtNum(d.uniqueSpotters), t('av.kpi.spottersSub'))}
+            ${tile(t('av.kpi.rbn'), `${fmtPct(d.rbn, total)}%`, t('av.kpi.rbnSub', { rbn: fmtNum(d.rbn), manual: fmtNum(d.manual) }))}
+            ${tile(t('av.kpi.topBand'), esc(topBand?.name || '—'), topBand ? t('av.kpi.topBandSub', { pct: fmtPct(topBand.count, total) }) : '')}
+        </div>
+        <div class="card"><h2><span>${esc(t('av.timeline'))}</span> <small>${esc(d.bucketMinutes >= 1440 ? t('rpt.perDayUtc') : t('av.timelineSub', { m: d.bucketMinutes }))}</small></h2><div id="report-chart"></div></div>
+        <div class="grid-2">
+            ${card(t('av.bands'), rankTable(d.bands, total, [{ label: t('av.band'), html: r => `<b>${esc(r.name)}</b>` }]))}
+            ${card(t('av.modes'), rankTable(d.modes, total, [{ label: t('rpt.mode'), html: r => `<b>${esc(r.name)}</b>` }]))}
+        </div>
+        ${card(t('av.countries'), rankTable(d.countries, total, [
+            { label: t('rpt.entity'), html: r => `${flagImg(r.adif)}<b>${esc(r.name)}</b>` },
+            { label: t('rpt.continent'), html: r => esc(r.continent || '') }
+        ]))}
+        <div class="grid-2">
+            ${card(t('av.calls'), rankTable(d.calls, total, [
+                { label: t('rpt.call'), html: r => `${flagImg(r.adif)}<b class="mono">${esc(r.name)}</b>` },
+                { label: t('av.bands'), html: r => `<span class="muted">${esc((r.bands || []).filter(Boolean).join(' '))}</span>` }
+            ]))}
+            ${card(t('av.spotters'), rankTable(d.spotters, total, [
+                { label: t('rpt.call'), html: r => `${flagImg(r.adif)}<b class="mono">${esc(r.name)}</b>` },
+                { label: t('rpt.entity'), html: r => `<span class="muted">${esc(r.country || '')}</span>` }
+            ]))}
+        </div>
+        ${card(t('av.paths'), matrix, t('av.pathsSub'))}
+        <div class="grid-2">
+            ${card(t('av.qsl'), qsl, t('rpt.qslSub', { n: fmtNum(uniq) }))}
+            ${card(t('av.sources'), rankTable(d.sources, total, [{ label: t('st.col.source'), html: r => `<b>${esc(r.name)}</b>` }]))}
+        </div>`;
+    out.hidden = false;
+
+    const points = fullTimeline(d);
+    const multiDay = d.to - d.from > DAY_MS;
+    const every = Math.max(1, Math.ceil(points.length / 12));
+    barChart($('report-chart'), points, {
+        aria: t('av.timelineAria'),
+        tick: (pt, i) => {
+            if (i % every) return null;
+            const dt = new Date(pt.t);
+            if (d.bucketMinutes >= 1440) return String(dt.getUTCDate());
+            return multiDay ? (dt.getUTCHours() === 0 ? fmtUtcDay(utcDay(pt.t), { day: 'numeric', month: 'short' }) : null) : hhmm(dt);
+        },
+        tip: (pt) => d.bucketMinutes >= 1440 ? fmtUtcDay(utcDay(pt.t)) : `${multiDay ? `${fmtUtcDay(utcDay(pt.t), { day: 'numeric', month: 'short' })} ` : ''}${hhmm(new Date(pt.t))} UTC`
+    });
+}
+
+setReportType('day');
 
 // --- Orígenes ---
 let sourcesCache = [];
